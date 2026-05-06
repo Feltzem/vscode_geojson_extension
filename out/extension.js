@@ -33,12 +33,53 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.toWebviewPayload = toWebviewPayload;
+exports.fromWebviewText = fromWebviewText;
+exports.buildWebviewCsp = buildWebviewCsp;
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const VIEW_TYPE = "geojsonVisualEditor";
 const EMPTY_COLLECTION = { type: "FeatureCollection", features: [] };
 const EMPTY_COLLECTION_JSON = JSON.stringify(EMPTY_COLLECTION, null, 2);
+function toWebviewPayload(rawText) {
+    try {
+        if (!rawText.trim().length) {
+            return { text: EMPTY_COLLECTION_JSON };
+        }
+        const parsed = JSON.parse(rawText);
+        return { text: JSON.stringify(parsed, null, 2) };
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid GeoJSON document.";
+        return {
+            text: EMPTY_COLLECTION_JSON,
+            error: message,
+        };
+    }
+}
+function fromWebviewText(webviewText) {
+    try {
+        const parsed = JSON.parse(webviewText);
+        return JSON.stringify(parsed, null, 2);
+    }
+    catch (error) {
+        throw new Error(error instanceof Error
+            ? error.message
+            : "Edited GeoJSON has invalid syntax.");
+    }
+}
+function buildWebviewCsp(cspSource, nonce) {
+    return [
+        `default-src 'none'`,
+        `img-src ${cspSource} https://demotiles.maplibre.org https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com data: blob:`,
+        `script-src 'nonce-${nonce}' https://unpkg.com`,
+        `style-src ${cspSource} https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://fonts.googleapis.com 'unsafe-inline'`,
+        `connect-src ${cspSource} https://demotiles.maplibre.org https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://fonts.googleapis.com https://fonts.gstatic.com`,
+        `font-src ${cspSource} https://demotiles.maplibre.org https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://fonts.gstatic.com`,
+        `worker-src blob:`,
+    ].join("; ");
+}
 function activate(context) {
     context.subscriptions.push(GeoJsonEditorProvider.register(context));
     context.subscriptions.push(vscode.commands.registerCommand("geojson-visual-editor.open", (uri) => {
@@ -125,80 +166,68 @@ class GeoJsonEditorProvider {
         }
     }
     toWebviewPayload(rawText) {
-        try {
-            if (!rawText.trim().length) {
-                return { text: EMPTY_COLLECTION_JSON };
-            }
-            const parsed = JSON.parse(rawText);
-            return { text: JSON.stringify(parsed, null, 2) };
-        }
-        catch (error) {
-            const message = error instanceof Error ? error.message : "Invalid GeoJSON document.";
-            return {
-                text: EMPTY_COLLECTION_JSON,
-                error: message,
-            };
-        }
+        return toWebviewPayload(rawText);
     }
     async persistWebviewText(document, webviewText) {
         const converted = this.fromWebviewText(webviewText);
         await this.replaceDocumentText(document, converted);
     }
     fromWebviewText(webviewText) {
-        try {
-            const parsed = JSON.parse(webviewText);
-            return JSON.stringify(parsed, null, 2);
-        }
-        catch (error) {
-            throw new Error(error instanceof Error
-                ? error.message
-                : "Edited GeoJSON has invalid syntax.");
-        }
+        return fromWebviewText(webviewText);
     }
     getWebviewContent(webview) {
         const utilsScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "geojson-utils.js"));
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "main.js"));
         const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "main.css"));
         const nonce = getNonce();
-        const csp = [
-            `default-src 'none'`,
-            `img-src ${webview.cspSource} https://demotiles.maplibre.org https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com data: blob:`,
-            `script-src 'nonce-${nonce}' https://unpkg.com`,
-            `style-src ${webview.cspSource} https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com 'unsafe-inline'`,
-            `connect-src ${webview.cspSource} https://demotiles.maplibre.org https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com`,
-            `font-src ${webview.cspSource} https://demotiles.maplibre.org https://unpkg.com https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com`,
-            `worker-src blob:`,
-        ].join("; ");
+        const csp = buildWebviewCsp(webview.cspSource, nonce);
         return /* html */ `<!DOCTYPE html>
 		<html lang="en">
 		<head>
 			<meta charset="utf-8" />
 			<meta http-equiv="Content-Security-Policy" content="${csp}" />
 			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+      <link href="https://fonts.googleapis.com/css2?family=Commit+Mono:wght@400;500&family=Hanken+Grotesk:wght@400;500&display=swap" rel="stylesheet" />
 			<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
 			<link rel="stylesheet" href="${stylesUri}" />
 			<title>GeoJSON Visual Editor</title>
 		</head>
 		<body>
 			<div class="app">
-				<section class="map-panel">
+				<section class="map-panel" aria-label="Map preview">
           <div id="map"></div>
+          <div id="graticule-overlay" class="graticule-overlay" aria-hidden="true"></div>
+          <div class="map-overlay map-toolbar" aria-label="Map controls">
+            <button id="map-zoom-in-btn" type="button" class="map-tool-button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button id="map-zoom-out-btn" type="button" class="map-tool-button" title="Zoom out" aria-label="Zoom out">-</button>
+            <button id="map-fit-btn" type="button" class="map-tool-button map-tool-text" title="Fit map to all features" aria-label="Fit map to all features">Fit</button>
+            <button id="edit-vertices-btn" type="button" class="map-tool-button map-tool-text" title="Edit selected feature vertices">Edit vertices</button>
+            <button id="snap-vertices-btn" type="button" class="map-tool-button map-tool-text map-snap-toggle" title="Snap dragged vertices to nearby vertices" aria-label="Snap dragged vertices to nearby vertices" aria-pressed="true" hidden>Snap on</button>
+          </div>
+          <div class="map-overlay map-metrics document-metrics" aria-live="polite">
+            <span id="feature-count-indicator" class="metric-pill">Features 0</span>
+            <span id="file-size-indicator" class="metric-pill">Size 0 B</span>
+          </div>
+          <div id="coordinate-readout" class="map-overlay coordinate-readout" aria-live="polite">Lng 0.000000, Lat 0.000000</div>
+          <div id="scale-readout" class="map-overlay scale-readout" aria-live="polite">
+            <span id="scale-label">Scale 0 m</span>
+            <span id="scale-bar" aria-hidden="true"></span>
+          </div>
           <div id="loading-indicator" class="loading-indicator hidden" aria-live="polite">
-            <span class="loading-spinner" aria-hidden="true"></span>
-            <span class="loading-text">Loading geometry...</span>
+            <span class="loading-text">Loading geometry</span>
           </div>
 				</section>
 				<section class="side-panel">
 					<header class="panel-header">
-						<h1>GeoJSON Visual Editor</h1>
-            <p class="subtitle">Inspect, style, and edit geojson files</p>
-            <div class="document-metrics" aria-live="polite">
-              <span id="feature-count-indicator" class="metric-pill">Features: 0</span>
-              <span id="file-size-indicator" class="metric-pill">Size: 0 B</span>
-            </div>
-            <label for="tooltip-toggle-input" class="header-toggle">
-              <input id="tooltip-toggle-input" type="checkbox" checked />
-              <span>Show hover tooltips</span>
+						<h1>GeoJSON visual editor</h1>
+            <label for="tooltip-toggle-input" class="header-toggle tooltip-toggle">
+              <span class="tooltip-toggle-label">Hover tooltips</span>
+              <span class="tooltip-toggle-control">
+                <input id="tooltip-toggle-input" type="checkbox" checked />
+                <span class="tooltip-toggle-state" aria-hidden="true"></span>
+              </span>
             </label>
 					</header>
           <section class="properties-group collapsible-section" aria-live="polite">
@@ -212,9 +241,9 @@ class GeoJsonEditorProvider {
               <div class="control-group">
                 <label for="basemap-select">Basemap style</label>
                 <select id="basemap-select">
-                  <option value="carto-positron">Carto Positron</option>
-                  <option value="carto-voyager">Carto Voyager</option>
-                  <option value="carto-dark-matter">Carto Dark Matter</option>
+                  <option value="carto-positron">Carto positron</option>
+                  <option value="carto-voyager">Carto voyager</option>
+                  <option value="carto-dark-matter">Carto dark matter</option>
                 </select>
               </div>
               <!-- Offline basemap option removed -->
@@ -224,14 +253,16 @@ class GeoJsonEditorProvider {
             <header class="group-header collapsible-header">
               <button type="button" class="collapsible-toggle" aria-expanded="true" aria-controls="geometry-styling-content">
                 <span class="caret" aria-hidden="true">▾</span>
-                <span>Geometry Styling</span>
+                <span>Geometry styling</span>
               </button>
             </header>
             <div id="geometry-styling-content" class="collapsible-content">
-              <p>Set shared fill and optional stroke styling for the map preview</p>
               <div class="style-row">
                 <label for="fill-colour-input">Fill colour</label>
-                <input id="fill-colour-input" type="color" value="#2563eb" />
+                <label class="color-field" for="fill-colour-input">
+                  <input id="fill-colour-input" type="color" value="#2563eb" />
+                  <span id="fill-colour-value" class="hex-readout">#2563EB</span>
+                </label>
               </div>
               <div class="control-group">
                 <label for="attribute-select">Colour features by attribute</label>
@@ -253,14 +284,17 @@ class GeoJsonEditorProvider {
                     <option value="custom">Custom</option>
                     <option value="magma">Magma</option>
                     <option value="viridis">Viridis</option>
-                    <option value="white-dark-red">White to Red</option>
-                    <option value="white-black">White to Black</option>
-                    <option value="white-dark-blue">White to Blue</option>
+                    <option value="white-dark-red">White to red</option>
+                    <option value="white-black">White to black</option>
+                    <option value="white-dark-blue">White to blue</option>
                   </select>
                 </div>
                 <div class="style-row">
                   <label for="gradient-start-colour">Gradient start colour</label>
-                  <input id="gradient-start-colour" type="color" value="#0ea5e9" />
+                  <label class="color-field" for="gradient-start-colour">
+                    <input id="gradient-start-colour" type="color" value="#0ea5e9" />
+                    <span id="gradient-start-colour-value" class="hex-readout">#0EA5E9</span>
+                  </label>
                 </div>
                 <div class="style-row">
                   <label for="gradient-middle-enabled" class="gradient-middle-toggle">
@@ -270,17 +304,26 @@ class GeoJsonEditorProvider {
                 </div>
                 <div class="style-row">
                   <label for="gradient-middle-colour">Gradient middle colour (optional)</label>
-                  <input id="gradient-middle-colour" type="color" value="#facc15" />
+                  <label class="color-field" for="gradient-middle-colour">
+                    <input id="gradient-middle-colour" type="color" value="#facc15" />
+                    <span id="gradient-middle-colour-value" class="hex-readout">#FACC15</span>
+                  </label>
                 </div>
                 <div class="style-row">
                   <label for="gradient-end-colour">Gradient end colour</label>
-                  <input id="gradient-end-colour" type="color" value="#ef4444" />
+                  <label class="color-field" for="gradient-end-colour">
+                    <input id="gradient-end-colour" type="color" value="#ef4444" />
+                    <span id="gradient-end-colour-value" class="hex-readout">#EF4444</span>
+                  </label>
                 </div>
               </div>
               <div class="style-row style-row-inline">
                 <div class="style-row-field">
                   <label for="stroke-colour-input">Stroke colour (optional)</label>
-                  <input id="stroke-colour-input" type="color" value="#f8fafc" />
+                  <label class="color-field" for="stroke-colour-input">
+                    <input id="stroke-colour-input" type="color" value="#f8fafc" />
+                    <span id="stroke-colour-value" class="hex-readout">#F8FAFC</span>
+                  </label>
                 </div>
                 <button id="clear-stroke-btn" type="button" class="secondary-btn">Clear stroke</button>
               </div>
@@ -318,26 +361,21 @@ class GeoJsonEditorProvider {
               </button>
             </header>
             <div id="labels-content" class="collapsible-content">
-              <p>Label features from an attribute</p>
-              <div class="label-card">
-                <label for="label-toggle-input" class="label-toggle-row">
-                  <span class="toggle-copy">
-                    <span class="toggle-title">Show labels</span>
-                  </span>
-                  <input id="label-toggle-input" type="checkbox" />
-                </label>
-                <div class="control-group">
-                  <label for="label-field-select">Label field</label>
-                  <select id="label-field-select">
-                    <option value="">Choose a field</option>
-                  </select>
-                </div>
-                <div class="label-preview" aria-live="polite">
-                  <span class="label-preview-chip" aria-hidden="true">Aa</span>
-                  <div class="label-preview-copy">
-                    <strong id="label-preview-value">Labels are off</strong>
-                    <span id="label-preview-meta">Choose a property to preview your map labels.</span>
-                  </div>
+              <label for="label-toggle-input" class="label-toggle-row">
+                <span>Show labels</span>
+                <input id="label-toggle-input" type="checkbox" />
+              </label>
+              <div class="control-group">
+                <label for="label-field-select">Label field</label>
+                <select id="label-field-select">
+                  <option value="">Choose a field</option>
+                </select>
+              </div>
+              <div class="label-preview" aria-live="polite">
+                <span class="label-preview-chip" aria-hidden="true">Aa</span>
+                <div class="label-preview-copy">
+                  <strong id="label-preview-value">Choose label field</strong>
+                  <span id="label-preview-meta">Choose a property to preview labels.</span>
                 </div>
               </div>
             </div>
@@ -346,7 +384,7 @@ class GeoJsonEditorProvider {
             <header class="group-header collapsible-header">
               <button type="button" class="collapsible-toggle" aria-expanded="true" aria-controls="new-features-content">
                 <span class="caret" aria-hidden="true">▾</span>
-                <span>New Features</span>
+                <span>New features</span>
               </button>
             </header>
             <div id="new-features-content" class="collapsible-content">
@@ -361,7 +399,7 @@ class GeoJsonEditorProvider {
             <header class="group-header collapsible-header">
               <button type="button" class="collapsible-toggle" aria-expanded="true" aria-controls="feature-properties-content">
                 <span class="caret" aria-hidden="true">▾</span>
-                <span>Feature Properties</span>
+                <span>Feature properties</span>
               </button>
             </header>
             <div id="feature-properties-content" class="collapsible-content">
@@ -369,24 +407,52 @@ class GeoJsonEditorProvider {
               <div id="properties-container" class="properties-container" role="group" aria-describedby="selection-hint"></div>
               <div class="property-actions">
                 <button id="add-property-btn" type="button">Add property</button>
-                <button id="edit-vertices-btn" type="button">Edit vertices</button>
                 <button id="delete-feature-btn" type="button">Delete feature</button>
               </div>
             </div>
           </section>
           <section class="properties-group collapsible-section" aria-live="polite">
-            <header class="group-header collapsible-header">
+            <header class="group-header collapsible-header document-data-header">
               <button type="button" class="collapsible-toggle" aria-expanded="true" aria-controls="document-data-content">
                 <span class="caret" aria-hidden="true">▾</span>
-                <span>Document Data</span>
+                <span>Document data</span>
               </button>
+              <button id="raw-search-toggle-btn" type="button" class="section-tool-button" aria-expanded="false" aria-controls="raw-find-panel">Search</button>
             </header>
             <div id="document-data-content" class="collapsible-content">
+              <div id="raw-find-panel" class="raw-find-panel" hidden>
+                <div class="raw-find-fields">
+                  <label class="raw-find-field" for="raw-find-input">
+                    <span>Find</span>
+                    <input id="raw-find-input" type="search" autocomplete="off" spellcheck="false" />
+                  </label>
+                  <label class="raw-find-field" for="raw-replace-input">
+                    <span>Replace</span>
+                    <input id="raw-replace-input" type="text" autocomplete="off" spellcheck="false" />
+                  </label>
+                </div>
+                <div class="raw-find-controls">
+                  <label class="raw-match-case-row" for="raw-match-case-input">
+                    <input id="raw-match-case-input" type="checkbox" />
+                    <span>Match case</span>
+                  </label>
+                  <span id="raw-find-count" class="raw-find-count" aria-live="polite">0 / 0</span>
+                  <div class="raw-find-nav">
+                    <button id="raw-find-prev-btn" type="button" class="secondary-btn" aria-label="Previous match">Previous</button>
+                    <button id="raw-find-next-btn" type="button" class="secondary-btn" aria-label="Next match">Next</button>
+                  </div>
+                </div>
+                <div class="raw-replace-actions">
+                  <button id="raw-replace-first-btn" type="button" class="secondary-btn">Replace first</button>
+                  <button id="raw-replace-all-btn" type="button" class="secondary-btn">Replace all</button>
+                </div>
+              </div>
               <div class="control-group">
                 <label for="geojson-input" id="raw-label">Document data</label>
                 <div class="json-editor" aria-label="Document data editor">
+                  <div id="geojson-gutter" class="json-gutter" aria-hidden="true">1</div>
                   <pre id="geojson-highlight" aria-hidden="true"></pre>
-                  <textarea id="geojson-input" spellcheck="false"></textarea>
+                  <textarea id="geojson-input" spellcheck="false" wrap="off"></textarea>
                 </div>
               </div>
               <div class="rounding-tools">
@@ -397,7 +463,7 @@ class GeoJsonEditorProvider {
                 <button id="round-coordinates-btn" type="button" class="secondary-btn">Round coordinates</button>
               </div>
               <div class="actions">
-                <button id="apply-btn" type="button">Apply Changes</button>
+                <button id="apply-btn" type="button">Apply changes</button>
                 <span id="status" role="status"></span>
               </div>
             </div>

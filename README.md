@@ -101,9 +101,54 @@ An internet connection is required for remote basemap/style assets:
 
 ## Development
 
-1. Run `npm install`.
-2. Run `npm run watch` for incremental TypeScript builds.
-3. Use the **Run Extension** launch configuration to debug in the Extension Host.
+1. Install dependencies:
+
+   ```sh
+   npm install
+   ```
+
+2. Run the standard checks before testing manually:
+
+   ```sh
+   npm run compile
+   npm run lint
+   npm test
+   ```
+
+   `npm test` launches the VS Code extension test runner. On first run it downloads a test copy of VS Code into `.vscode-test/`, which is ignored by git.
+
+3. For day-to-day development, run the TypeScript watcher:
+
+   ```sh
+   npm run watch
+   ```
+
+4. Start an Extension Development Host from VS Code:
+
+   - Open this folder in VS Code.
+   - Press `F5`, or use **Run and Debug** → **Run Extension**.
+   - In the Extension Development Host window, open a `.geojson` file.
+   - If the file opens as text, run **GeoJSON: Open in GeoJSON Visual Editor** from the Command Palette or use the Explorer context menu.
+
+5. Manual test checklist:
+
+   - Open a valid `.geojson` file and confirm the map renders and fits to the data.
+   - Switch basemaps and verify the geometry, labels, metrics, graticule, scale, and coordinate readout continue to update.
+   - Change fill, stroke, line width, attribute colouring, gradients, opacity, and labels.
+   - Select a feature, add/edit/remove properties, then click **Apply changes** and confirm the file is saved.
+   - Add a point, line, and polygon from the sidebar.
+   - Enter vertex edit mode, drag vertices, insert vertices with left-click, and delete vertices with right-click.
+   - Paste invalid JSON in the document editor and confirm the error is specific and the extension does not crash.
+   - Test in both dark and light VS Code themes to verify Cartograph Night/Day styling.
+
+6. To test the packaged extension, build a VSIX:
+
+   ```sh
+   npx vsce package --no-dependencies --out /private/tmp/geojson-visual-editor.vsix
+   code --install-extension /private/tmp/geojson-visual-editor.vsix
+   ```
+
+   The package uses `.vscodeignore` so source files, tests, maps, and `.vscode-test/` are excluded from the VSIX.
 
 ## Release Notes
 

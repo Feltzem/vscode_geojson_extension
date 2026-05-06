@@ -2,6 +2,15 @@
   const vscode = acquireVsCodeApi();
   const textArea = document.getElementById("geojson-input");
   const highlightLayer = document.getElementById("geojson-highlight");
+  const jsonGutter = document.getElementById("geojson-gutter");
+  const graticuleOverlay = document.getElementById("graticule-overlay");
+  const coordinateReadout = document.getElementById("coordinate-readout");
+  const scaleLabel = document.getElementById("scale-label");
+  const scaleBar = document.getElementById("scale-bar");
+  const mapToolbar = document.querySelector(".map-toolbar");
+  const mapZoomInButton = document.getElementById("map-zoom-in-btn");
+  const mapZoomOutButton = document.getElementById("map-zoom-out-btn");
+  const mapFitButton = document.getElementById("map-fit-btn");
   const attributeSelect = document.getElementById("attribute-select");
   const labelToggleInput = document.getElementById("label-toggle-input");
   const labelFieldSelect = document.getElementById("label-field-select");
@@ -12,13 +21,27 @@
   const propertiesContainer = document.getElementById("properties-container");
   const addPropertyButton = document.getElementById("add-property-btn");
   const editVerticesButton = document.getElementById("edit-vertices-btn");
+  const snapVerticesButton = document.getElementById("snap-vertices-btn");
   const deleteFeatureButton = document.getElementById("delete-feature-btn");
   const addPointButton = document.getElementById("add-point-btn");
   const addLineButton = document.getElementById("add-linestring-btn");
   const addPolygonButton = document.getElementById("add-polygon-btn");
   const loadingIndicator = document.getElementById("loading-indicator");
   const rawLabel = document.getElementById("raw-label");
-  const subtitle = document.querySelector(".subtitle");
+  const rawSearchToggleButton = document.getElementById(
+    "raw-search-toggle-btn",
+  );
+  const rawFindPanel = document.getElementById("raw-find-panel");
+  const rawFindInput = document.getElementById("raw-find-input");
+  const rawReplaceInput = document.getElementById("raw-replace-input");
+  const rawMatchCaseInput = document.getElementById("raw-match-case-input");
+  const rawFindPrevButton = document.getElementById("raw-find-prev-btn");
+  const rawFindNextButton = document.getElementById("raw-find-next-btn");
+  const rawReplaceFirstButton = document.getElementById(
+    "raw-replace-first-btn",
+  );
+  const rawReplaceAllButton = document.getElementById("raw-replace-all-btn");
+  const rawFindCount = document.getElementById("raw-find-count");
   const featureCountIndicator = document.getElementById(
     "feature-count-indicator",
   );
@@ -26,7 +49,9 @@
   const tooltipToggleInput = document.getElementById("tooltip-toggle-input");
   const basemapSelect = document.getElementById("basemap-select");
   const fillColourInput = document.getElementById("fill-colour-input");
+  const fillColourValue = document.getElementById("fill-colour-value");
   const strokeColourInput = document.getElementById("stroke-colour-input");
+  const strokeColourValue = document.getElementById("stroke-colour-value");
   const clearStrokeButton = document.getElementById("clear-stroke-btn");
   const lineWidthInput = document.getElementById("line-width-input");
   const lineWidthValue = document.getElementById("line-width-value");
@@ -39,13 +64,22 @@
   const gradientStartColourInput = document.getElementById(
     "gradient-start-colour",
   );
+  const gradientStartColourValue = document.getElementById(
+    "gradient-start-colour-value",
+  );
   const gradientMiddleEnabledInput = document.getElementById(
     "gradient-middle-enabled",
   );
   const gradientMiddleColourInput = document.getElementById(
     "gradient-middle-colour",
   );
+  const gradientMiddleColourValue = document.getElementById(
+    "gradient-middle-colour-value",
+  );
   const gradientEndColourInput = document.getElementById("gradient-end-colour");
+  const gradientEndColourValue = document.getElementById(
+    "gradient-end-colour-value",
+  );
   const gradientPresetSelect = document.getElementById(
     "gradient-preset-select",
   );
@@ -157,6 +191,7 @@
   let mapHasData = false;
   let hasFitOnce = false;
   let isEditingVertices = false;
+  let snapVerticesEnabled = true;
   let vertexMarkers = [];
   let draggedVertex = null;
   let loadingTimeout = null;
@@ -164,9 +199,13 @@
   let hoverTooltipsEnabled = Boolean(tooltipToggleInput?.checked ?? true);
   let coordinatePrecision = parsePrecision(roundDecimalsInput?.value);
   let selectedBasemap = basemapSelect?.value || "carto-positron";
-  let toolbarMetricsNode = null;
+  let instrumentUpdateFrame = null;
+  let themeUpdateFrame = null;
+  let rawTextMeasureCanvas = null;
+  let toolbarDragState = null;
   const maxVertexInsertDistancePx = 24;
   const maxVertexDeleteDistancePx = 16;
+  const maxVertexSnapDistancePx = 14;
 
   const styleState = {
     fillColor: "#2563eb",
@@ -187,8 +226,21 @@
     labelField: "",
   };
 
+  const rawFindState = {
+    isOpen: false,
+    query: "",
+    replacement: "",
+    matchCase: false,
+    matches: [],
+    activeIndex: -1,
+  };
+  const customSelects = new Map();
+
   document.addEventListener("DOMContentLoaded", () => {
+    initialiseCustomSelects();
     initialiseMap();
+    initialiseMapToolbar();
+    initialiseThemeObserver();
     initialiseJsonEditorHighlighting();
     updateDocumentMetrics();
     vscode.postMessage({ type: "ready" });
@@ -212,6 +264,277 @@
       return;
     }
   });
+
+  function initialiseCustomSelects() {
+    document.querySelectorAll("select").forEach((select) => {
+      enhanceNativeSelect(select);
+    });
+
+    document.addEventListener("click", (event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".cartograph-select")
+      ) {
+        return;
+      }
+      closeAllCustomSelects();
+    });
+  }
+
+  function enhanceNativeSelect(select) {
+    if (!select || customSelects.has(select)) {
+      return;
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "cartograph-select";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cartograph-select-button";
+    button.setAttribute("aria-haspopup", "listbox");
+    button.setAttribute("aria-expanded", "false");
+
+    const valueNode = document.createElement("span");
+    valueNode.className = "cartograph-select-value";
+
+    const caret = document.createElement("span");
+    caret.className = "cartograph-select-caret";
+    caret.setAttribute("aria-hidden", "true");
+
+    const menu = document.createElement("div");
+    menu.className = "cartograph-select-menu";
+    menu.setAttribute("role", "listbox");
+    menu.hidden = true;
+
+    const menuId = `${select.id || "cartograph-select"}-menu`;
+    const buttonId = `${select.id || "cartograph-select"}-button`;
+    menu.id = menuId;
+    button.id = buttonId;
+    button.setAttribute("aria-controls", menuId);
+
+    const label = select.labels?.[0];
+    if (label) {
+      if (!label.id) {
+        label.id = `${select.id || "cartograph-select"}-label`;
+      }
+      button.setAttribute("aria-labelledby", `${label.id} ${buttonId}`);
+    }
+
+    button.append(valueNode, caret);
+    wrapper.append(button, menu);
+    select.classList.add("native-select-hidden");
+    select.insertAdjacentElement("afterend", wrapper);
+
+    const observer = new MutationObserver(() => {
+      syncCustomSelect(select);
+    });
+    observer.observe(select, {
+      attributes: true,
+      attributeFilter: ["disabled"],
+      childList: true,
+      subtree: true,
+    });
+
+    customSelects.set(select, { wrapper, button, valueNode, menu, observer });
+
+    button.addEventListener("click", () => {
+      toggleCustomSelect(select);
+    });
+
+    button.addEventListener("keydown", (event) => {
+      handleCustomSelectButtonKeydown(event, select);
+    });
+
+    menu.addEventListener("keydown", (event) => {
+      handleCustomSelectMenuKeydown(event, select);
+    });
+
+    select.addEventListener("change", () => {
+      syncCustomSelect(select);
+    });
+
+    select.addEventListener("focus", () => {
+      button.focus();
+    });
+
+    syncCustomSelect(select);
+  }
+
+  function syncAllCustomSelects() {
+    customSelects.forEach((_, select) => {
+      syncCustomSelect(select);
+    });
+  }
+
+  function syncCustomSelect(select) {
+    const state = customSelects.get(select);
+    if (!state) {
+      return;
+    }
+
+    const { wrapper, button, valueNode, menu } = state;
+    const selectedOption = select.selectedOptions?.[0] || select.options[0];
+    valueNode.textContent = selectedOption?.textContent || "";
+    button.disabled = select.disabled;
+    wrapper.classList.toggle("is-disabled", select.disabled);
+
+    menu.innerHTML = "";
+    Array.from(select.options).forEach((option, index) => {
+      const optionButton = document.createElement("button");
+      optionButton.type = "button";
+      optionButton.className = "cartograph-select-option";
+      optionButton.setAttribute("role", "option");
+      optionButton.dataset.index = String(index);
+      optionButton.textContent = option.textContent || "";
+      optionButton.disabled = option.disabled;
+
+      const isSelected = index === select.selectedIndex;
+      optionButton.classList.toggle("is-selected", isSelected);
+      optionButton.setAttribute("aria-selected", isSelected ? "true" : "false");
+
+      optionButton.addEventListener("click", () => {
+        chooseCustomSelectOption(select, index);
+      });
+
+      menu.appendChild(optionButton);
+    });
+  }
+
+  function toggleCustomSelect(select, forceOpen) {
+    const state = customSelects.get(select);
+    if (!state || select.disabled) {
+      return;
+    }
+
+    const shouldOpen =
+      typeof forceOpen === "boolean"
+        ? forceOpen
+        : !state.wrapper.classList.contains("is-open");
+
+    if (shouldOpen) {
+      closeAllCustomSelects(select);
+      syncCustomSelect(select);
+    }
+
+    state.wrapper.classList.toggle("is-open", shouldOpen);
+    state.menu.hidden = !shouldOpen;
+    state.button.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+  }
+
+  function closeAllCustomSelects(exceptSelect = null) {
+    customSelects.forEach((state, select) => {
+      if (select === exceptSelect) {
+        return;
+      }
+      state.wrapper.classList.remove("is-open");
+      state.menu.hidden = true;
+      state.button.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function chooseCustomSelectOption(select, index) {
+    const state = customSelects.get(select);
+    if (!state || select.disabled || index < 0 || index >= select.options.length) {
+      return;
+    }
+
+    const option = select.options[index];
+    if (option.disabled) {
+      return;
+    }
+
+    const didChange = select.selectedIndex !== index;
+    select.selectedIndex = index;
+    syncCustomSelect(select);
+    toggleCustomSelect(select, false);
+    state.button.focus();
+
+    if (didChange) {
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function handleCustomSelectButtonKeydown(event, select) {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggleCustomSelect(select, true);
+      focusCustomSelectOption(select, getEnabledCustomOptionIndex(select, 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      toggleCustomSelect(select, true);
+      focusCustomSelectOption(select, getEnabledCustomOptionIndex(select, -1));
+    }
+  }
+
+  function handleCustomSelectMenuKeydown(event, select) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      toggleCustomSelect(select, false);
+      customSelects.get(select)?.button.focus();
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const currentIndex = getFocusedCustomOptionIndex(select);
+      focusCustomSelectOption(
+        select,
+        getEnabledCustomOptionIndex(select, direction, currentIndex),
+      );
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      focusCustomSelectOption(
+        select,
+        getEnabledCustomOptionIndex(select, event.key === "Home" ? 1 : -1, event.key === "Home" ? -1 : select.options.length),
+      );
+    }
+  }
+
+  function getFocusedCustomOptionIndex(select) {
+    const state = customSelects.get(select);
+    if (!state || !(document.activeElement instanceof HTMLElement)) {
+      return select.selectedIndex;
+    }
+    const optionButton = document.activeElement.closest(
+      ".cartograph-select-option",
+    );
+    if (!optionButton || !state.menu.contains(optionButton)) {
+      return select.selectedIndex;
+    }
+    return Number(optionButton.dataset.index || select.selectedIndex);
+  }
+
+  function getEnabledCustomOptionIndex(select, direction, fromIndex = select.selectedIndex) {
+    if (!select.options.length) {
+      return -1;
+    }
+    let index = fromIndex;
+    for (let attempts = 0; attempts < select.options.length; attempts += 1) {
+      index += direction;
+      if (index < 0) {
+        index = select.options.length - 1;
+      } else if (index >= select.options.length) {
+        index = 0;
+      }
+      if (!select.options[index].disabled) {
+        return index;
+      }
+    }
+    return select.selectedIndex;
+  }
+
+  function focusCustomSelectOption(select, index) {
+    const state = customSelects.get(select);
+    if (!state || index < 0) {
+      return;
+    }
+    const optionButton = state.menu.querySelector(`[data-index="${index}"]`);
+    if (optionButton instanceof HTMLElement) {
+      optionButton.focus();
+    }
+  }
 
   applyButton.addEventListener("click", () => {
     const nextText = textArea.value;
@@ -268,6 +591,72 @@
   if (roundCoordinatesButton) {
     roundCoordinatesButton.addEventListener("click", () => {
       roundCurrentCoordinates();
+    });
+  }
+
+  if (rawSearchToggleButton) {
+    rawSearchToggleButton.addEventListener("click", () => {
+      setRawFindPanelOpen(!rawFindState.isOpen, {
+        seedFromSelection: true,
+        focusFindInput: true,
+      });
+    });
+  }
+
+  if (rawFindInput) {
+    rawFindInput.addEventListener("input", () => {
+      rawFindState.query = rawFindInput.value;
+      refreshRawFindMatches({ activeFromSelection: true });
+      updateJsonHighlight(currentText);
+    });
+
+    rawFindInput.addEventListener("keydown", handleRawFindInputKeydown);
+  }
+
+  if (rawReplaceInput) {
+    rawReplaceInput.addEventListener("input", () => {
+      rawFindState.replacement = rawReplaceInput.value;
+    });
+
+    rawReplaceInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        replaceActiveRawMatch();
+      } else if (event.key === "Escape") {
+        setRawFindPanelOpen(false, { focusEditor: true });
+      }
+    });
+  }
+
+  if (rawMatchCaseInput) {
+    rawMatchCaseInput.addEventListener("change", () => {
+      rawFindState.matchCase = rawMatchCaseInput.checked;
+      refreshRawFindMatches({ activeFromSelection: true });
+      updateJsonHighlight(currentText);
+    });
+  }
+
+  if (rawFindPrevButton) {
+    rawFindPrevButton.addEventListener("click", () => {
+      moveRawFindMatch(-1);
+    });
+  }
+
+  if (rawFindNextButton) {
+    rawFindNextButton.addEventListener("click", () => {
+      moveRawFindMatch(1);
+    });
+  }
+
+  if (rawReplaceFirstButton) {
+    rawReplaceFirstButton.addEventListener("click", () => {
+      replaceActiveRawMatch();
+    });
+  }
+
+  if (rawReplaceAllButton) {
+    rawReplaceAllButton.addEventListener("click", () => {
+      replaceAllRawMatches();
     });
   }
 
@@ -458,6 +847,21 @@
     }
   });
 
+  if (snapVerticesButton) {
+    snapVerticesButton.addEventListener("click", () => {
+      snapVerticesEnabled = !snapVerticesEnabled;
+      updateMapToolbarState();
+      if (isEditingVertices) {
+        setStatus(
+          snapVerticesEnabled
+            ? "Vertex snapping enabled."
+            : "Vertex snapping disabled.",
+          "",
+        );
+      }
+    });
+  }
+
   if (deleteFeatureButton) {
     deleteFeatureButton.addEventListener("click", () => {
       deleteSelectedFeature();
@@ -500,11 +904,8 @@
       style: getCurrentBasemapStyle(),
       center: [0, 0],
       zoom: 1,
+      attributionControl: true,
     });
-
-    map.addControl(new maplibregl.NavigationControl());
-    map.addControl(createDocumentMetricsControl(), "top-left");
-    map.addControl(createFitToFeaturesControl(), "top-right");
 
     map.on("load", () => {
       mapReady = true;
@@ -512,6 +913,9 @@
       map.on("click", handleMapClick);
       map.on("contextmenu", handleMapContextMenu);
       map.on("mousemove", handleMapHover);
+      map.on("move", scheduleInstrumentUpdate);
+      map.on("zoom", scheduleInstrumentUpdate);
+      map.on("resize", scheduleInstrumentUpdate);
       map.getCanvasContainer().addEventListener("mouseleave", () => {
         hideHoverTooltip();
         map.getCanvas().style.cursor = isEditingVertices ? "crosshair" : "";
@@ -522,6 +926,140 @@
         updateMap(data, options);
       }
       updateDocumentMetrics();
+      updateMapInstruments();
+    });
+  }
+
+  function initialiseMapToolbar() {
+    initialiseMapToolbarDrag();
+
+    if (mapZoomInButton) {
+      mapZoomInButton.addEventListener("click", () => {
+        if (mapReady) {
+          map.zoomIn({ duration: 180 });
+        }
+      });
+    }
+
+    if (mapZoomOutButton) {
+      mapZoomOutButton.addEventListener("click", () => {
+        if (mapReady) {
+          map.zoomOut({ duration: 180 });
+        }
+      });
+    }
+
+    if (mapFitButton) {
+      mapFitButton.addEventListener("click", () => {
+        fitCurrentDataToMap();
+      });
+    }
+
+    updateMapToolbarState();
+  }
+
+  function initialiseMapToolbarDrag() {
+    if (!mapToolbar) {
+      return;
+    }
+
+    mapToolbar.addEventListener("pointerdown", (event) => {
+      if (
+        event.button !== 0 ||
+        !(event.target instanceof Element) ||
+        event.target.closest("button")
+      ) {
+        return;
+      }
+
+      const container = mapToolbar.parentElement;
+      if (!container) {
+        return;
+      }
+
+      const containerRect = container.getBoundingClientRect();
+      const toolbarRect = mapToolbar.getBoundingClientRect();
+      toolbarDragState = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - toolbarRect.left,
+        offsetY: event.clientY - toolbarRect.top,
+        maxLeft: Math.max(8, containerRect.width - toolbarRect.width - 8),
+        maxTop: Math.max(8, containerRect.height - toolbarRect.height - 8),
+        parentLeft: containerRect.left,
+        parentTop: containerRect.top,
+      };
+      mapToolbar.classList.add("dragging");
+      mapToolbar.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    mapToolbar.addEventListener("pointermove", (event) => {
+      if (!toolbarDragState || toolbarDragState.pointerId !== event.pointerId) {
+        return;
+      }
+      moveMapToolbar(event);
+    });
+
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => {
+      mapToolbar.addEventListener(eventName, endMapToolbarDrag);
+    });
+  }
+
+  function moveMapToolbar(event) {
+    const nextLeft = clampNumber(
+      event.clientX - toolbarDragState.parentLeft - toolbarDragState.offsetX,
+      8,
+      toolbarDragState.maxLeft,
+      12,
+    );
+    const nextTop = clampNumber(
+      event.clientY - toolbarDragState.parentTop - toolbarDragState.offsetY,
+      8,
+      toolbarDragState.maxTop,
+      12,
+    );
+
+    mapToolbar.style.left = `${nextLeft}px`;
+    mapToolbar.style.top = `${nextTop}px`;
+    mapToolbar.style.right = "auto";
+    mapToolbar.style.bottom = "auto";
+  }
+
+  function endMapToolbarDrag() {
+    if (!toolbarDragState || !mapToolbar) {
+      return;
+    }
+    mapToolbar.classList.remove("dragging");
+    toolbarDragState = null;
+  }
+
+  function initialiseThemeObserver() {
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+
+    const observer = new MutationObserver(scheduleThemePaintUpdate);
+    const options = {
+      attributes: true,
+      attributeFilter: ["class", "data-vscode-theme-kind", "style"],
+    };
+
+    [document.documentElement, document.body].forEach((target) => {
+      if (target) {
+        observer.observe(target, options);
+      }
+    });
+  }
+
+  function scheduleThemePaintUpdate() {
+    if (themeUpdateFrame !== null) {
+      return;
+    }
+
+    themeUpdateFrame = window.requestAnimationFrame(() => {
+      themeUpdateFrame = null;
+      reapplyCartographMapPaints();
+      updateMapInstruments();
     });
   }
 
@@ -562,6 +1100,7 @@
       applyLabels();
       updateStyleControlAvailability(data);
       updateDocumentMetrics();
+      updateMapInstruments();
       setLoading(false);
     };
 
@@ -598,25 +1137,272 @@
     }
   }
 
-  function createDocumentMetricsControl() {
+  function fitCurrentDataToMap() {
+    if (!currentGeoJson || !collectFeatures(currentGeoJson).length) {
+      setStatus("No features available to fit.", "");
+      return;
+    }
+    fitToDataBounds(map, currentGeoJson);
+  }
+
+  function updateMapToolbarState() {
+    const hasFeatures = Boolean(
+      currentGeoJson && collectFeatures(currentGeoJson).length,
+    );
+    if (mapZoomInButton) {
+      mapZoomInButton.disabled = !mapReady;
+    }
+    if (mapZoomOutButton) {
+      mapZoomOutButton.disabled = !mapReady;
+    }
+    if (mapFitButton) {
+      mapFitButton.disabled = !mapReady || !hasFeatures;
+    }
+    if (editVerticesButton) {
+      const hasSelection = Boolean(getSelectedFeature());
+      editVerticesButton.disabled = !mapReady || !hasSelection;
+      editVerticesButton.classList.toggle("active", isEditingVertices);
+      editVerticesButton.setAttribute(
+        "aria-pressed",
+        isEditingVertices ? "true" : "false",
+      );
+      editVerticesButton.textContent = isEditingVertices
+        ? "Stop editing"
+        : "Edit vertices";
+    }
+    if (snapVerticesButton) {
+      snapVerticesButton.hidden = !isEditingVertices;
+      snapVerticesButton.disabled = !isEditingVertices;
+      snapVerticesButton.classList.toggle("active", snapVerticesEnabled);
+      snapVerticesButton.setAttribute(
+        "aria-pressed",
+        snapVerticesEnabled ? "true" : "false",
+      );
+      snapVerticesButton.textContent = snapVerticesEnabled
+        ? "Snap on"
+        : "Snap off";
+    }
+  }
+
+  function scheduleInstrumentUpdate() {
+    if (instrumentUpdateFrame !== null) {
+      return;
+    }
+    instrumentUpdateFrame = window.requestAnimationFrame(() => {
+      instrumentUpdateFrame = null;
+      updateMapInstruments();
+    });
+  }
+
+  function updateMapInstruments() {
+    if (!mapReady || !map) {
+      return;
+    }
+    updateCoordinateReadout(map.getCenter());
+    updateScaleReadout();
+    renderGraticule();
+  }
+
+  function updateCoordinateReadout(lngLat) {
+    if (!coordinateReadout || !lngLat) {
+      return;
+    }
+    const lng = normaliseLongitude(lngLat.lng).toFixed(6);
+    const lat = clampLatitude(lngLat.lat).toFixed(6);
+    coordinateReadout.textContent = `Lng ${lng}, Lat ${lat}`;
+  }
+
+  function updateScaleReadout() {
+    if (!scaleLabel || !scaleBar || !map) {
+      return;
+    }
+    const container = map.getContainer();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    if (!width || !height) {
+      return;
+    }
+    const barWidth = 60;
+    const measurement = getScaleBarMeasurement(container, barWidth);
+    const start = map.unproject(measurement.start);
+    const end = map.unproject(measurement.end);
+    const distance = getDistanceMeters(start, end);
+    scaleLabel.textContent = formatDistance(distance);
+    scaleBar.style.width = `${measurement.width}px`;
+  }
+
+  function getScaleBarMeasurement(container, fallbackWidth) {
+    const containerRect = container.getBoundingClientRect();
+    const barRect = scaleBar.getBoundingClientRect();
+    const mapWidth = container.clientWidth;
+    const mapHeight = container.clientHeight;
+
+    if (
+      containerRect.width > 0 &&
+      containerRect.height > 0 &&
+      barRect.width > 0 &&
+      barRect.height > 0
+    ) {
+      const left = clampNumber(barRect.left - containerRect.left, 0, mapWidth, 0);
+      const right = clampNumber(
+        barRect.right - containerRect.left,
+        0,
+        mapWidth,
+        fallbackWidth,
+      );
+      const y = clampNumber(
+        barRect.top - containerRect.top + barRect.height / 2,
+        0,
+        mapHeight,
+        Math.max(24, mapHeight - 24),
+      );
+      if (right > left) {
+        return {
+          start: [left, y],
+          end: [right, y],
+          width: right - left,
+        };
+      }
+    }
+
+    const right = Math.max(0, mapWidth - 20);
+    const left = Math.max(0, right - fallbackWidth);
+    const y = Math.max(24, mapHeight - 24);
     return {
-      onAdd() {
-        const container = document.createElement("div");
-        container.className =
-          "maplibregl-ctrl maplibregl-ctrl-group toolbar-metrics-control";
-
-        const node = document.createElement("div");
-        node.className = "toolbar-metrics-label";
-        node.textContent = "Features: 0 | Size: 0 B";
-
-        container.appendChild(node);
-        toolbarMetricsNode = node;
-        return container;
-      },
-      onRemove() {
-        toolbarMetricsNode = null;
-      },
+      start: [left, y],
+      end: [right, y],
+      width: Math.max(1, right - left),
     };
+  }
+
+  function getDistanceMeters(start, end) {
+    const radiusMeters = 6371008.8;
+    const lat1 = toRadians(start.lat);
+    const lat2 = toRadians(end.lat);
+    const deltaLat = toRadians(end.lat - start.lat);
+    const deltaLng = toRadians(end.lng - start.lng);
+    const a =
+      Math.sin(deltaLat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+    return radiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function toRadians(degrees) {
+    return (degrees * Math.PI) / 180;
+  }
+
+  function formatDistance(meters) {
+    if (!Number.isFinite(meters) || meters <= 0) {
+      return "0 m";
+    }
+    if (meters < 1000) {
+      return `${Math.max(1, Math.round(meters))} m`;
+    }
+    if (meters < 100000) {
+      return `${(meters / 1000).toFixed(1)} km`;
+    }
+    return `${Math.round(meters / 1000)} km`;
+  }
+
+  function renderGraticule() {
+    if (!graticuleOverlay || !map) {
+      return;
+    }
+    const container = map.getContainer();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    if (!width || !height) {
+      return;
+    }
+
+    graticuleOverlay.innerHTML = "";
+    const bounds = map.getBounds();
+    const west = bounds.getWest();
+    const east = bounds.getEast();
+    const south = Math.max(-85, bounds.getSouth());
+    const north = Math.min(85, bounds.getNorth());
+    const lonStep = getNiceStep((east - west) / 5);
+    const latStep = getNiceStep((north - south) / 5);
+
+    appendMeridians(west, east, lonStep);
+    appendParallels(south, north, latStep);
+  }
+
+  function getNiceStep(rawStep) {
+    if (!Number.isFinite(rawStep) || rawStep <= 0) {
+      return 1;
+    }
+    const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+    const normalised = rawStep / magnitude;
+    const nice =
+      normalised <= 1
+        ? 1
+        : normalised <= 2
+          ? 2
+          : normalised <= 5
+            ? 5
+            : 10;
+    return nice * magnitude;
+  }
+
+  function appendMeridians(west, east, step) {
+    const lat = map.getCenter().lat;
+    const start = Math.ceil(west / step) * step;
+    for (let lng = start; lng <= east; lng += step) {
+      const point = map.project([lng, lat]);
+      if (point.x < 0 || point.x > map.getContainer().clientWidth) {
+        continue;
+      }
+      appendGraticuleLine("vertical", point.x);
+      appendGraticuleLabel(formatCoordinate(lng, "lng"), point.x + 3, 6);
+    }
+  }
+
+  function appendParallels(south, north, step) {
+    const lng = map.getCenter().lng;
+    const start = Math.ceil(south / step) * step;
+    for (let lat = start; lat <= north; lat += step) {
+      const point = map.project([lng, lat]);
+      if (point.y < 0 || point.y > map.getContainer().clientHeight) {
+        continue;
+      }
+      appendGraticuleLine("horizontal", point.y);
+      appendGraticuleLabel(formatCoordinate(lat, "lat"), 6, point.y + 3);
+    }
+  }
+
+  function appendGraticuleLine(axis, offset) {
+    const line = document.createElement("span");
+    line.className = `graticule-line ${axis}`;
+    if (axis === "vertical") {
+      line.style.left = `${offset}px`;
+    } else {
+      line.style.top = `${offset}px`;
+    }
+    graticuleOverlay.appendChild(line);
+  }
+
+  function appendGraticuleLabel(text, left, top) {
+    const label = document.createElement("span");
+    label.className = "graticule-label";
+    label.textContent = text;
+    label.style.left = `${left}px`;
+    label.style.top = `${top}px`;
+    graticuleOverlay.appendChild(label);
+  }
+
+  function formatCoordinate(value, axis) {
+    const normalised =
+      axis === "lng" ? normaliseLongitude(value) : clampLatitude(value);
+    const suffix =
+      axis === "lng"
+        ? normalised < 0
+          ? "W"
+          : "E"
+        : normalised < 0
+          ? "S"
+          : "N";
+    return `${Math.abs(normalised).toFixed(2)}°${suffix}`;
   }
 
   function updateBasemapControlsState() {
@@ -690,6 +1476,8 @@
   }
 
   function handleMapHover(event) {
+    updateCoordinateReadout(event.lngLat);
+
     if (!mapReady || !hoverTooltipsEnabled || isEditingVertices) {
       hideHoverTooltip();
       if (mapReady) {
@@ -734,37 +1522,6 @@
     hoverPopup.remove();
   }
 
-  function createFitToFeaturesControl() {
-    return {
-      onAdd() {
-        const container = document.createElement("div");
-        container.className =
-          "maplibregl-ctrl maplibregl-ctrl-group fit-features-control";
-
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "fit-features-button";
-        button.textContent = "<>";
-        button.setAttribute("title", "Fit map to all features");
-        button.setAttribute("aria-label", "Fit map to all features");
-        button.addEventListener("click", () => {
-          if (!currentGeoJson || !collectFeatures(currentGeoJson).length) {
-            setStatus("No features available to fit.", "");
-            return;
-          }
-          fitToDataBounds(map, currentGeoJson);
-        });
-
-        container.appendChild(button);
-        this._container = container;
-        return container;
-      },
-      onRemove() {
-        this._container?.remove();
-      },
-    };
-  }
-
   function selectFeature(index) {
     if (
       !currentGeoJson ||
@@ -792,6 +1549,7 @@
     if (isEditingVertices && feature) {
       updateVertexMarkers(feature);
     }
+    updateMapToolbarState();
   }
 
   function updateAddFeatureButtonsState() {
@@ -805,6 +1563,7 @@
       element.removeAttribute("title");
       element.removeAttribute("aria-disabled");
     });
+    updateMapToolbarState();
   }
 
   function renderPropertiesPanel(feature) {
@@ -825,7 +1584,7 @@
       const empty = document.createElement("div");
       empty.className = "empty-state";
       empty.textContent =
-        "Pick a feature on the map to view and edit its properties.";
+        "Select a feature on the map to edit its properties.";
       propertiesContainer.appendChild(empty);
       return;
     }
@@ -847,7 +1606,7 @@
     if (!entries.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "No properties yet. Add one to get started.";
+      empty.textContent = "Add a property to annotate this feature.";
       propertiesContainer.appendChild(empty);
     }
 
@@ -986,7 +1745,7 @@
     updateAddFeatureButtonsState();
     const statusMessage = notice ? `${message} ${notice}` : message;
     setStatus(
-      `${statusMessage.trim()} Click Apply Changes to save to disk.`,
+      `${statusMessage.trim()} Apply changes to save to disk.`,
       "",
     );
     refreshSelectionState();
@@ -1091,6 +1850,9 @@
     const sourceId = "geojson-data";
     const prepared = prepareMapData(data) || emptyCollection;
     const hasFeatures = prepared.features.length > 0;
+    const { accent, accentSoft, elev, text, bg, mapBg } =
+      getCartographMapTokens();
+    map.getCanvas().style.backgroundColor = mapBg;
 
     if (map.getSource(sourceId)) {
       const source = map.getSource(sourceId);
@@ -1170,8 +1932,8 @@
         type: "fill",
         source: sourceId,
         paint: {
-          "fill-color": "#fde68a",
-          "fill-opacity": 0.6,
+          "fill-color": accentSoft,
+          "fill-opacity": 0.72,
         },
         filter: ["==", ["get", "__editorIndex"], -1],
       });
@@ -1181,8 +1943,8 @@
         type: "line",
         source: sourceId,
         paint: {
-          "line-color": "#fde68a",
-          "line-width": 6,
+          "line-color": accent,
+          "line-width": 4,
         },
         filter: ["==", ["get", "__editorIndex"], -1],
       });
@@ -1193,8 +1955,8 @@
         source: sourceId,
         paint: {
           "circle-radius": 8,
-          "circle-color": "#fde68a",
-          "circle-stroke-color": "#facc15",
+          "circle-color": elev,
+          "circle-stroke-color": accent,
           "circle-stroke-width": 2,
         },
         filter: ["==", ["get", "__editorIndex"], -1],
@@ -1225,8 +1987,8 @@
           visibility: "none",
         },
         paint: {
-          "text-color": "#f8fafc",
-          "text-halo-color": "rgba(15, 23, 42, 0.92)",
+          "text-color": text,
+          "text-halo-color": bg,
           "text-halo-width": 2,
           "text-halo-blur": 0.8,
           "text-opacity": 0.96,
@@ -1266,8 +2028,8 @@
           visibility: "none",
         },
         paint: {
-          "text-color": "#f8fafc",
-          "text-halo-color": "rgba(15, 23, 42, 0.95)",
+          "text-color": text,
+          "text-halo-color": bg,
           "text-halo-width": 2,
           "text-halo-blur": 0.9,
           "text-opacity": 0.94,
@@ -1305,8 +2067,8 @@
           visibility: "none",
         },
         paint: {
-          "text-color": "#f8fafc",
-          "text-halo-color": "rgba(15, 23, 42, 0.94)",
+          "text-color": text,
+          "text-halo-color": bg,
           "text-halo-width": 2.25,
           "text-halo-blur": 1,
           "text-opacity": 0.96,
@@ -1338,6 +2100,8 @@
     }
     refreshSelectionHighlight();
     applyLabels();
+    updateMapToolbarState();
+    scheduleInstrumentUpdate();
   }
 
   function buildHoverTooltipHtml(renderedFeature) {
@@ -1400,6 +2164,43 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
+  }
+
+  function getCssToken(name, fallback) {
+    const value = getComputedStyle(document.body || document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    return value || fallback;
+  }
+
+  function getCartographMapTokens() {
+    return {
+      accent: getCssToken("--carto-accent", "#4ac9d0"),
+      accentSoft: getCssToken("--carto-accent-soft", "#004245"),
+      elev: getCssToken("--carto-elev", "#242d30"),
+      text: getCssToken("--carto-text", "#e0eaed"),
+      bg: getCssToken("--carto-bg", "#11191b"),
+      mapBg: getCssToken("--carto-map-bg", "#111d20"),
+    };
+  }
+
+  function reapplyCartographMapPaints() {
+    if (!mapReady || !map) {
+      return;
+    }
+
+    const { accent, accentSoft, elev, text, bg, mapBg } =
+      getCartographMapTokens();
+    map.getCanvas().style.backgroundColor = mapBg;
+    applyPaint("geojson-highlight-fill", "fill-color", accentSoft);
+    applyPaint("geojson-highlight-line", "line-color", accent);
+    applyPaint("geojson-highlight-point", "circle-color", elev);
+    applyPaint("geojson-highlight-point", "circle-stroke-color", accent);
+
+    labelLayerIds.forEach((layerId) => {
+      applyPaint(layerId, "text-color", text);
+      applyPaint(layerId, "text-halo-color", bg);
+    });
   }
 
   function prepareMapData(data) {
@@ -1895,11 +2696,12 @@
       if (!hasFields) {
         labelFieldSelect.setAttribute(
           "title",
-          "Add a string, number, or boolean property to enable labels.",
+          "Add a string, number, or boolean property to use as a label.",
         );
       } else {
         labelFieldSelect.removeAttribute("title");
       }
+      syncCustomSelect(labelFieldSelect);
     }
 
     if (labelToggleInput) {
@@ -1910,7 +2712,7 @@
           "title",
           hasFields
             ? "Choose a label field first."
-            : "No label fields are available yet.",
+            : "Add a property to make label fields available.",
         );
       } else {
         labelToggleInput.removeAttribute("title");
@@ -1926,10 +2728,10 @@
     }
 
     if (!styleState.labelField) {
-      labelPreviewValue.textContent = "Labels are off";
+      labelPreviewValue.textContent = "Choose label field";
       labelPreviewMeta.textContent = labelFieldSelect?.disabled
-        ? "Add a property to a feature to make label fields available"
-        : "Choose a property to preview your map labels";
+        ? "Add a property to make label fields available."
+        : "Choose a property to preview labels.";
       return;
     }
 
@@ -1941,7 +2743,7 @@
     }
 
     labelPreviewValue.textContent = previewValue || styleState.labelField;
-    labelPreviewMeta.textContent = `Showing "${styleState.labelField}" with dynamic placement and halo styling.`;
+    labelPreviewMeta.textContent = `Showing "${styleState.labelField}" with map-aware placement.`;
   }
 
   function getLabelPreviewValue(field) {
@@ -2060,6 +2862,8 @@
   function syncStyleInputs() {
     fillColourInput.value = styleState.fillColor;
     strokeColourInput.value = styleState.strokeColor;
+    syncHexReadout(fillColourValue, styleState.fillColor);
+    syncHexReadout(strokeColourValue, styleState.strokeColor);
     lineWidthInput.value = styleState.lineWidth.toFixed(1);
     strokeWidthInput.value = styleState.strokeWidth.toFixed(1);
     lineWidthValue.textContent = styleState.lineWidth.toFixed(1);
@@ -2069,12 +2873,42 @@
     gradientMiddleEnabledInput.checked = styleState.gradientMiddleEnabled;
     gradientMiddleColourInput.value = styleState.gradientMiddleColor;
     gradientEndColourInput.value = styleState.gradientEndColor;
+    syncHexReadout(gradientStartColourValue, styleState.gradientStartColor);
+    syncHexReadout(gradientMiddleColourValue, styleState.gradientMiddleColor);
+    syncHexReadout(gradientEndColourValue, styleState.gradientEndColor);
     gradientPresetSelect.value = styleState.gradientPreset;
     opacityAttributeSelect.value = styleState.opacityAttribute;
     opacityMinInput.value = String(styleState.minTransparency);
     opacityMaxInput.value = String(styleState.maxTransparency);
     opacityMinValue.textContent = `${styleState.minTransparency}%`;
     opacityMaxValue.textContent = `${styleState.maxTransparency}%`;
+    syncRangeInputProgress(lineWidthInput);
+    syncRangeInputProgress(strokeWidthInput);
+    syncRangeInputProgress(opacityMinInput);
+    syncRangeInputProgress(opacityMaxInput);
+    syncAllCustomSelects();
+  }
+
+  function syncRangeInputProgress(input) {
+    if (!input) {
+      return;
+    }
+
+    const min = Number(input.min || 0);
+    const max = Number(input.max || 100);
+    const value = Number(input.value || min);
+    const progress =
+      max > min
+        ? clampNumber(((value - min) / (max - min)) * 100, 0, 100, 0)
+        : 0;
+    input.style.setProperty("--range-progress", `${progress}%`);
+  }
+
+  function syncHexReadout(node, value) {
+    if (!node) {
+      return;
+    }
+    node.textContent = String(value || "").toUpperCase();
   }
 
   function applyPaint(layerId, property, value) {
@@ -2145,7 +2979,7 @@
       const statusMessage = notice
         ? `${notice} Coordinates rounded to ${coordinatePrecision} decimal ${suffix}.`
         : `Coordinates rounded to ${coordinatePrecision} decimal ${suffix}.`;
-      setStatus(`${statusMessage} Click Apply Changes to save to disk.`, "");
+      setStatus(`${statusMessage} Apply changes to save to disk.`, "");
     } catch (error) {
       setStatus(formatError(error), "error");
     }
@@ -2159,6 +2993,333 @@
     return Math.max(0, Math.min(10, parsed));
   }
 
+  function setRawFindPanelOpen(isOpen, options = {}) {
+    rawFindState.isOpen = Boolean(isOpen);
+
+    if (rawFindPanel) {
+      rawFindPanel.hidden = !rawFindState.isOpen;
+    }
+    if (rawSearchToggleButton) {
+      rawSearchToggleButton.setAttribute(
+        "aria-expanded",
+        rawFindState.isOpen ? "true" : "false",
+      );
+    }
+
+    if (rawFindState.isOpen) {
+      if (options.seedFromSelection) {
+        seedRawFindFromSelection();
+      }
+      refreshRawFindMatches({ activeFromSelection: true });
+      updateJsonHighlight(currentText);
+      if (options.focusFindInput && rawFindInput) {
+        rawFindInput.focus();
+        rawFindInput.select();
+      }
+      return;
+    }
+
+    updateRawFindControls();
+    updateJsonHighlight(currentText);
+    if (options.focusEditor && textArea) {
+      textArea.focus();
+    }
+  }
+
+  function seedRawFindFromSelection() {
+    if (!textArea || !rawFindInput) {
+      return;
+    }
+
+    const selectedText = textArea.value.slice(
+      textArea.selectionStart,
+      textArea.selectionEnd,
+    );
+    if (!selectedText || selectedText.includes("\n")) {
+      return;
+    }
+
+    rawFindInput.value = selectedText;
+    rawFindState.query = selectedText;
+  }
+
+  function handleRawFindInputKeydown(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      moveRawFindMatch(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      setRawFindPanelOpen(false, { focusEditor: true });
+    }
+  }
+
+  function handleRawEditorFindShortcut(event) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      setRawFindPanelOpen(true, {
+        seedFromSelection: true,
+        focusFindInput: true,
+      });
+    }
+  }
+
+  function refreshRawFindMatches(options = {}) {
+    const previousStart =
+      rawFindState.matches[rawFindState.activeIndex]?.start ?? null;
+    rawFindState.matches = findLiteralMatches(
+      textArea?.value || "",
+      rawFindState.query,
+      rawFindState.matchCase,
+    );
+
+    if (!rawFindState.matches.length) {
+      rawFindState.activeIndex = -1;
+      updateRawFindControls();
+      return;
+    }
+
+    if (options.activeFromSelection && textArea) {
+      rawFindState.activeIndex = getRawMatchIndexAtOrAfter(
+        textArea.selectionStart,
+      );
+    } else if (Number.isFinite(previousStart)) {
+      rawFindState.activeIndex = getRawMatchIndexAtOrAfter(previousStart);
+    } else if (
+      rawFindState.activeIndex < 0 ||
+      rawFindState.activeIndex >= rawFindState.matches.length
+    ) {
+      rawFindState.activeIndex = 0;
+    }
+
+    updateRawFindControls();
+  }
+
+  function findLiteralMatches(text, query, matchCase) {
+    if (!query) {
+      return [];
+    }
+
+    const source = String(text);
+    const needle = matchCase ? query : query.toLowerCase();
+    const haystack = matchCase ? source : source.toLowerCase();
+    const matches = [];
+    let index = haystack.indexOf(needle);
+
+    while (index !== -1) {
+      matches.push({
+        start: index,
+        end: index + query.length,
+      });
+      index = haystack.indexOf(needle, index + query.length);
+    }
+
+    return matches;
+  }
+
+  function getRawMatchIndexAtOrAfter(position) {
+    const nextIndex = rawFindState.matches.findIndex(
+      (match) => match.start >= position,
+    );
+    return nextIndex === -1 ? 0 : nextIndex;
+  }
+
+  function updateRawFindControls() {
+    const hasQuery = Boolean(rawFindState.query);
+    const hasMatches = rawFindState.matches.length > 0;
+
+    if (rawFindCount) {
+      rawFindCount.textContent = hasMatches
+        ? `${rawFindState.activeIndex + 1} / ${rawFindState.matches.length}`
+        : "0 / 0";
+    }
+
+    [
+      rawFindPrevButton,
+      rawFindNextButton,
+      rawReplaceFirstButton,
+      rawReplaceAllButton,
+    ].forEach((button) => {
+      if (button) {
+        button.disabled = !hasQuery || !hasMatches;
+      }
+    });
+  }
+
+  function moveRawFindMatch(delta) {
+    if (!rawFindState.matches.length) {
+      updateRawFindControls();
+      return;
+    }
+
+    rawFindState.activeIndex =
+      (rawFindState.activeIndex + delta + rawFindState.matches.length) %
+      rawFindState.matches.length;
+    selectActiveRawFindMatch();
+  }
+
+  function selectActiveRawFindMatch() {
+    const match = rawFindState.matches[rawFindState.activeIndex];
+    if (!match || !textArea) {
+      updateRawFindControls();
+      return;
+    }
+
+    textArea.focus();
+    textArea.setSelectionRange(match.start, match.end);
+    scrollRawEditorToMatch(match);
+    updateJsonHighlight(currentText);
+    updateRawFindControls();
+    window.requestAnimationFrame(syncJsonHighlightScroll);
+  }
+
+  function scrollRawEditorToMatch(match) {
+    if (!textArea || !match) {
+      return;
+    }
+
+    const metrics = getRawEditorMetrics();
+    const textBeforeMatch = textArea.value.slice(0, match.start);
+    const lineIndex = countLines(textBeforeMatch) - 1;
+    const lineStartIndex = textBeforeMatch.lastIndexOf("\n") + 1;
+    const columnText = textArea.value.slice(lineStartIndex, match.start);
+    const matchText = textArea.value.slice(match.start, match.end);
+    const targetTop = metrics.paddingTop + lineIndex * metrics.lineHeight;
+    const targetBottom = targetTop + metrics.lineHeight;
+    const targetLeft = metrics.paddingLeft + measureRawEditorText(columnText);
+    const targetRight = targetLeft + measureRawEditorText(matchText);
+    const verticalMargin = metrics.lineHeight * 2;
+    const horizontalMargin = metrics.characterWidth * 4;
+    const visibleTop = textArea.scrollTop;
+    const visibleBottom = visibleTop + textArea.clientHeight;
+    const visibleLeft = textArea.scrollLeft;
+    const visibleRight = visibleLeft + textArea.clientWidth;
+
+    if (targetTop < visibleTop + verticalMargin) {
+      textArea.scrollTop = Math.max(0, targetTop - verticalMargin);
+    } else if (targetBottom > visibleBottom - verticalMargin) {
+      textArea.scrollTop = Math.max(
+        0,
+        targetBottom - textArea.clientHeight + verticalMargin,
+      );
+    }
+
+    if (targetLeft < visibleLeft + horizontalMargin) {
+      textArea.scrollLeft = Math.max(0, targetLeft - horizontalMargin);
+    } else if (targetRight > visibleRight - horizontalMargin) {
+      textArea.scrollLeft = Math.max(
+        0,
+        targetRight - textArea.clientWidth + horizontalMargin,
+      );
+    }
+
+    syncJsonHighlightScroll();
+  }
+
+  function getRawEditorMetrics() {
+    const style = window.getComputedStyle(textArea);
+    const fontSize = parseFloat(style.fontSize) || 11;
+    const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.55;
+    return {
+      characterWidth: measureRawEditorText("0") || fontSize * 0.62,
+      lineHeight,
+      paddingLeft: parseFloat(style.paddingLeft) || 0,
+      paddingTop: parseFloat(style.paddingTop) || 0,
+    };
+  }
+
+  function measureRawEditorText(value) {
+    if (!rawTextMeasureCanvas) {
+      rawTextMeasureCanvas = document.createElement("canvas");
+    }
+    const context = rawTextMeasureCanvas.getContext("2d");
+    if (!context || !textArea) {
+      return String(value).length * 7;
+    }
+
+    const style = window.getComputedStyle(textArea);
+    context.font = [
+      style.fontStyle,
+      style.fontVariant,
+      style.fontWeight,
+      style.fontSize,
+      style.fontFamily,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return context.measureText(String(value)).width;
+  }
+
+  function countLines(value) {
+    if (!value) {
+      return 1;
+    }
+    return String(value).split("\n").length;
+  }
+
+  function replaceActiveRawMatch() {
+    if (!rawFindState.matches.length || !textArea) {
+      return;
+    }
+
+    const match =
+      rawFindState.matches[rawFindState.activeIndex] || rawFindState.matches[0];
+    const nextText = replaceTextRange(
+      textArea.value,
+      match,
+      rawFindState.replacement,
+    );
+    const nextSelectionStart = match.start;
+    const nextSelectionEnd = match.start + rawFindState.replacement.length;
+
+    updateRawEditorTextAfterReplace(
+      nextText,
+      nextSelectionStart,
+      nextSelectionEnd,
+    );
+    setStatus("Replaced 1 match. Apply changes to save to disk.", "");
+  }
+
+  function replaceAllRawMatches() {
+    if (!rawFindState.matches.length || !textArea) {
+      return;
+    }
+
+    const matchCount = rawFindState.matches.length;
+    let nextText = "";
+    let cursor = 0;
+
+    rawFindState.matches.forEach((match) => {
+      nextText += textArea.value.slice(cursor, match.start);
+      nextText += rawFindState.replacement;
+      cursor = match.end;
+    });
+    nextText += textArea.value.slice(cursor);
+
+    updateRawEditorTextAfterReplace(nextText, 0, 0);
+    setStatus(
+      `Replaced ${matchCount} ${matchCount === 1 ? "match" : "matches"}. Apply changes to save to disk.`,
+      "",
+    );
+  }
+
+  function replaceTextRange(text, match, replacement) {
+    return `${text.slice(0, match.start)}${replacement}${text.slice(match.end)}`;
+  }
+
+  function updateRawEditorTextAfterReplace(
+    nextText,
+    selectionStart,
+    selectionEnd,
+  ) {
+    currentText = nextText;
+    textArea.value = nextText;
+    textArea.setSelectionRange(selectionStart, selectionEnd);
+    refreshRawFindMatches();
+    scrollRawEditorToMatch({ start: selectionStart, end: selectionEnd });
+    updateJsonHighlight(nextText);
+    syncJsonHighlightScroll();
+    updateDocumentMetrics();
+  }
+
   function initialiseJsonEditorHighlighting() {
     if (!textArea) {
       return;
@@ -2166,6 +3327,7 @@
 
     textArea.addEventListener("input", () => {
       currentText = textArea.value;
+      refreshRawFindMatches();
       updateJsonHighlight(currentText);
       syncJsonHighlightScroll();
       updateDocumentMetrics();
@@ -2175,12 +3337,16 @@
       syncJsonHighlightScroll();
     });
 
+    textArea.addEventListener("keydown", handleRawEditorFindShortcut);
+
+    refreshRawFindMatches();
     updateJsonHighlight(textArea.value || "");
     syncJsonHighlightScroll();
   }
 
   function setEditorText(text) {
     textArea.value = text;
+    refreshRawFindMatches();
     updateJsonHighlight(text);
     syncJsonHighlightScroll();
   }
@@ -2192,6 +3358,9 @@
 
     highlightLayer.scrollTop = textArea.scrollTop;
     highlightLayer.scrollLeft = textArea.scrollLeft;
+    if (jsonGutter) {
+      jsonGutter.scrollTop = textArea.scrollTop;
+    }
   }
 
   function updateJsonHighlight(text) {
@@ -2201,6 +3370,7 @@
 
     const source = typeof text === "string" ? text : "";
     highlightLayer.innerHTML = highlightJson(source);
+    updateJsonGutter(source);
   }
 
   function highlightJson(text) {
@@ -2208,6 +3378,7 @@
       return " ";
     }
 
+    const searchMatches = getSearchMatchesForHighlight();
     const tokenRegex =
       /"(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
 
@@ -2218,7 +3389,13 @@
     while (match) {
       const token = match[0];
       const start = match.index;
-      html += escapeHtml(text.slice(lastIndex, start));
+      html += renderTextWithSearch(
+        text.slice(lastIndex, start),
+        "",
+        lastIndex,
+        searchMatches,
+        true,
+      );
 
       let className = "json-number";
       if (token.startsWith('"')) {
@@ -2229,20 +3406,149 @@
         className = "json-null";
       }
 
-      html += `<span class="${className}">${escapeHtml(token)}</span>`;
+      if (className === "json-key" && token.endsWith(":")) {
+        html += renderTextWithSearch(
+          token.slice(0, -1),
+          className,
+          start,
+          searchMatches,
+          false,
+        );
+        html += renderTextWithSearch(
+          ":",
+          "json-punctuation",
+          start + token.length - 1,
+          searchMatches,
+          false,
+        );
+      } else {
+        html += renderTextWithSearch(
+          token,
+          className,
+          start,
+          searchMatches,
+          false,
+        );
+      }
       lastIndex = tokenRegex.lastIndex;
       match = tokenRegex.exec(text);
     }
 
-    html += escapeHtml(text.slice(lastIndex));
+    html += renderTextWithSearch(
+      text.slice(lastIndex),
+      "",
+      lastIndex,
+      searchMatches,
+      true,
+    );
     return html;
+  }
+
+  function getSearchMatchesForHighlight() {
+    if (!rawFindState.isOpen || !rawFindState.query) {
+      return [];
+    }
+    return rawFindState.matches;
+  }
+
+  function renderTextWithSearch(
+    text,
+    className,
+    baseOffset,
+    searchMatches,
+    shouldHighlightPunctuation,
+  ) {
+    if (!text.length) {
+      return "";
+    }
+
+    const segmentStart = baseOffset;
+    const segmentEnd = baseOffset + text.length;
+    const overlappingMatches = searchMatches.filter(
+      (match) => match.end > segmentStart && match.start < segmentEnd,
+    );
+
+    if (!overlappingMatches.length) {
+      return renderTextPiece(text, className, shouldHighlightPunctuation);
+    }
+
+    let html = "";
+    let cursor = 0;
+    overlappingMatches.forEach((match) => {
+      const localStart = Math.max(0, match.start - baseOffset);
+      const localEnd = Math.min(text.length, match.end - baseOffset);
+
+      if (localStart > cursor) {
+        html += renderTextPiece(
+          text.slice(cursor, localStart),
+          className,
+          shouldHighlightPunctuation,
+        );
+      }
+
+      const markClass =
+        rawFindState.matches[rawFindState.activeIndex] === match
+          ? "json-search-match active"
+          : "json-search-match";
+      html += `<mark class="${markClass}">${renderTextPiece(
+        text.slice(localStart, localEnd),
+        className,
+        shouldHighlightPunctuation,
+      )}</mark>`;
+      cursor = localEnd;
+    });
+
+    if (cursor < text.length) {
+      html += renderTextPiece(
+        text.slice(cursor),
+        className,
+        shouldHighlightPunctuation,
+      );
+    }
+
+    return html;
+  }
+
+  function renderTextPiece(text, className, shouldHighlightPunctuation) {
+    if (!text.length) {
+      return "";
+    }
+
+    if (className) {
+      return `<span class="${className}">${escapeHtml(text)}</span>`;
+    }
+
+    if (!shouldHighlightPunctuation) {
+      return escapeHtml(text);
+    }
+
+    let html = "";
+    for (const char of String(text)) {
+      if ("{}[],:".includes(char)) {
+        html += `<span class="json-punctuation">${escapeHtml(char)}</span>`;
+      } else {
+        html += escapeHtml(char);
+      }
+    }
+    return html;
+  }
+
+  function updateJsonGutter(text) {
+    if (!jsonGutter) {
+      return;
+    }
+    const lineCount = Math.max(1, String(text).split("\n").length);
+    const lines = Array.from({ length: lineCount }, (_, index) =>
+      String(index + 1),
+    );
+    jsonGutter.textContent = lines.join("\n");
   }
 
   function updateDocumentMetrics() {
     const featureCount = collectFeatures(currentGeoJson).length;
     const fileBytes = getUtf8ByteLength(currentText || "");
-    const featureLabel = `Features: ${featureCount}`;
-    const sizeLabel = `Size: ${formatBytes(fileBytes)}`;
+    const featureLabel = `Features ${featureCount}`;
+    const sizeLabel = `Size ${formatBytes(fileBytes)}`;
 
     if (featureCountIndicator) {
       featureCountIndicator.textContent = featureLabel;
@@ -2250,9 +3556,7 @@
     if (fileSizeIndicator) {
       fileSizeIndicator.textContent = sizeLabel;
     }
-    if (toolbarMetricsNode) {
-      toolbarMetricsNode.textContent = `${featureLabel} | ${sizeLabel}`;
-    }
+    updateMapToolbarState();
   }
 
   function getUtf8ByteLength(value) {
@@ -2305,10 +3609,6 @@
       rawLabel.textContent = "Document data";
     }
 
-    if (subtitle) {
-      subtitle.textContent = "Inspect, style, and edit geojson files";
-    }
-
     textArea.removeAttribute("title");
 
     updateAddFeatureButtonsState();
@@ -2330,7 +3630,7 @@
 
   function formatError(error) {
     if (!error) {
-      return "Unknown error";
+      return "Unknown GeoJSON error.";
     }
     if (typeof error === "string") {
       return error;
@@ -2447,6 +3747,7 @@
     }
     updateVertexMarkers(feature);
     renderPropertiesPanel(feature);
+    updateMapToolbarState();
   }
 
   function exitVertexEditMode() {
@@ -2460,6 +3761,7 @@
     if (feature) {
       renderPropertiesPanel(feature);
     }
+    updateMapToolbarState();
   }
 
   function clearVertexMarkers() {
@@ -2478,9 +3780,16 @@
     const coordinates = extractCoordinates(geometry);
 
     coordinates.forEach((coord, index) => {
+      const markerElement = document.createElement("div");
+      markerElement.className = "vertex-marker";
+      markerElement.tabIndex = 0;
+      markerElement.setAttribute("role", "button");
+      markerElement.setAttribute(
+        "aria-label",
+        `Vertex ${index + 1}. Drag to move. Right-click to delete.`,
+      );
       const marker = new maplibregl.Marker({
-        color: "#ef4444",
-        scale: 0.8,
+        element: markerElement,
         draggable: true,
       })
         .setLngLat([coord[0], coord[1]])
@@ -2491,17 +3800,20 @@
           marker,
           index,
           feature,
+          featureIndex: selectedFeatureIndex,
           originalCoord: [coord[0], coord[1]],
         };
+        markerElement.classList.remove("snapping");
       });
 
       marker.on("drag", () => {
         if (draggedVertex) {
-          const lngLat = draggedVertex.marker.getLngLat();
-          updateGeometryCoordinate(draggedVertex.feature, draggedVertex.index, [
-            lngLat.lng,
-            lngLat.lat,
-          ]);
+          const nextCoordinate = getDraggedVertexCoordinate(draggedVertex);
+          updateGeometryCoordinate(
+            draggedVertex.feature,
+            draggedVertex.index,
+            nextCoordinate,
+          );
 
           // Update map geometry live while dragging.
           updateMap(currentGeoJson);
@@ -2510,20 +3822,22 @@
 
       marker.on("dragend", () => {
         if (draggedVertex) {
-          const lngLat = draggedVertex.marker.getLngLat();
-          updateGeometryCoordinate(draggedVertex.feature, draggedVertex.index, [
-            lngLat.lng,
-            lngLat.lat,
-          ]);
+          const nextCoordinate = getDraggedVertexCoordinate(draggedVertex);
+          draggedVertex.marker.setLngLat(nextCoordinate);
+          updateGeometryCoordinate(
+            draggedVertex.feature,
+            draggedVertex.index,
+            nextCoordinate,
+          );
           commitGeometryChanges("Vertex moved.");
+          markerElement.classList.remove("snapping");
           draggedVertex = null;
         }
       });
 
-      const markerElement = marker.getElement();
       markerElement.title = "Drag to move. Right-click to delete.";
 
-      ["mousedown", "mouseup", "click", "dblclick"].forEach((eventName) => {
+      ["mouseup", "click", "dblclick"].forEach((eventName) => {
         markerElement.addEventListener(eventName, (vertexEvent) => {
           vertexEvent.stopPropagation();
         });
@@ -2572,6 +3886,14 @@
       normaliseLongitude(coordinate?.[0]),
       clampLatitude(coordinate?.[1]),
     ];
+  }
+
+  function isCoordinatePair(coordinate) {
+    return (
+      Array.isArray(coordinate) &&
+      Number.isFinite(Number(coordinate[0])) &&
+      Number.isFinite(Number(coordinate[1]))
+    );
   }
 
   function getEditableCoordinatePath(geometry) {
@@ -2648,6 +3970,82 @@
     return Number.isInteger(nearestIndex)
       ? { index: nearestIndex, distance: nearestDistance }
       : null;
+  }
+
+  function getDraggedVertexCoordinate(dragContext) {
+    const lngLat = dragContext.marker.getLngLat();
+    const freeCoordinate = normaliseCoordinate([lngLat.lng, lngLat.lat]);
+    const snapTarget = findNearestSnapVertex(freeCoordinate, dragContext);
+    const markerElement = dragContext.marker.getElement();
+
+    if (snapTarget) {
+      markerElement?.classList.add("snapping");
+      dragContext.marker.setLngLat(snapTarget.coordinate);
+      return snapTarget.coordinate;
+    }
+
+    markerElement?.classList.remove("snapping");
+    return freeCoordinate;
+  }
+
+  function findNearestSnapVertex(coordinate, dragContext) {
+    if (!snapVerticesEnabled || !mapReady || !map || !currentGeoJson) {
+      return null;
+    }
+
+    const targetPoint = map.project(coordinate);
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    collectSnapVertices().forEach((vertex) => {
+      if (
+        Number.isInteger(dragContext?.featureIndex) &&
+        vertex.featureIndex === dragContext.featureIndex &&
+        vertex.vertexIndex === dragContext.index
+      ) {
+        return;
+      }
+
+      const projected = map.project(vertex.coordinate);
+      const distance = Math.hypot(
+        projected.x - targetPoint.x,
+        projected.y - targetPoint.y,
+      );
+
+      if (distance < nearestDistance) {
+        nearest = vertex;
+        nearestDistance = distance;
+      }
+    });
+
+    if (!nearest || nearestDistance > maxVertexSnapDistancePx) {
+      return null;
+    }
+
+    return {
+      coordinate: [...nearest.coordinate],
+      distance: nearestDistance,
+    };
+  }
+
+  function collectSnapVertices() {
+    const features = collectFeatures(currentGeoJson);
+    const vertices = [];
+
+    features.forEach((feature, featureIndex) => {
+      extractCoordinates(feature?.geometry).forEach((coordinate, vertexIndex) => {
+        if (!isCoordinatePair(coordinate)) {
+          return;
+        }
+        vertices.push({
+          featureIndex,
+          vertexIndex,
+          coordinate: normaliseCoordinate(coordinate),
+        });
+      });
+    });
+
+    return vertices;
   }
 
   function findNearestSegmentIndex(feature, point) {
@@ -2861,6 +4259,9 @@
         break;
       default: {
         const pathDetails = getEditableCoordinatePath(geometry);
+        if (!pathDetails || !Array.isArray(pathDetails.path)) {
+          break;
+        }
         const vertexCount = getEditableVertexCount(pathDetails);
         for (let index = 0; index < vertexCount; index += 1) {
           coordinates.push(pathDetails.path[index]);

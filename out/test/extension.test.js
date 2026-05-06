@@ -34,12 +34,34 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const assert = __importStar(require("assert"));
-const vscode = __importStar(require("vscode"));
-suite("Extension Test Suite", () => {
-    vscode.window.showInformationMessage("Start all tests.");
-    test("Array does not include unknown values", () => {
-        assert.ok(![1, 2, 3].includes(5));
-        assert.ok(![1, 2, 3].includes(0));
+const extension_1 = require("../extension");
+suite("GeoJSON Visual Editor", () => {
+    test("uses an empty feature collection for blank documents", () => {
+        const payload = (0, extension_1.toWebviewPayload)("  ");
+        assert.strictEqual(payload.error, undefined);
+        assert.deepStrictEqual(JSON.parse(payload.text), {
+            type: "FeatureCollection",
+            features: [],
+        });
+    });
+    test("reports invalid JSON while sending safe fallback content", () => {
+        const payload = (0, extension_1.toWebviewPayload)("{ invalid");
+        assert.ok(payload.error);
+        assert.deepStrictEqual(JSON.parse(payload.text), {
+            type: "FeatureCollection",
+            features: [],
+        });
+    });
+    test("normalises edited webview JSON before persisting", () => {
+        const text = (0, extension_1.fromWebviewText)('{"type":"FeatureCollection","features":[]}');
+        assert.strictEqual(text, '{\n  "type": "FeatureCollection",\n  "features": []\n}');
+    });
+    test("allows Cartograph font loading in the webview CSP", () => {
+        const csp = (0, extension_1.buildWebviewCsp)("vscode-resource:", "nonce-value");
+        assert.match(csp, /script-src 'nonce-nonce-value' https:\/\/unpkg.com/);
+        assert.match(csp, /style-src .*https:\/\/fonts\.googleapis\.com/);
+        assert.match(csp, /connect-src .*https:\/\/fonts\.gstatic\.com/);
+        assert.match(csp, /font-src .*https:\/\/fonts\.gstatic\.com/);
     });
 });
 //# sourceMappingURL=extension.test.js.map

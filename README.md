@@ -65,7 +65,7 @@ The custom editor is registered as the default editor for supported GeoJSON file
 - Apply workflow validates/normalizes data, updates the map, and saves back to disk.
 - Invalid JSON/GeoJSON input is surfaced with clear error messages.
 
-![Capture](https://github.com/user-attachments/assets/9294b15f-382a-4bae-b54a-f8c0e5f3814f)
+![Capture](./media/Capture.JPG)
 
 ## Commands
 
@@ -124,14 +124,12 @@ An internet connection is required for remote basemap/style assets:
    ```
 
 4. Start an Extension Development Host from VS Code:
-
    - Open this folder in VS Code.
    - Press `F5`, or use **Run and Debug** → **Run Extension**.
    - In the Extension Development Host window, open a `.geojson` file.
    - If the file opens as text, run **GeoJSON: Open in GeoJSON Visual Editor** from the Command Palette or use the Explorer context menu.
 
 5. Manual test checklist:
-
    - Open a valid `.geojson` file and confirm the map renders and fits to the data.
    - Switch basemaps and verify the geometry, labels, metrics, graticule, scale, and coordinate readout continue to update.
    - Change fill, stroke, line width, attribute colouring, gradients, opacity, and labels.

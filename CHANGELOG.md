@@ -28,3 +28,8 @@ All notable changes to the "geojson-visual-editor" extension will be documented 
 ## [0.5.0] - 2026-04-20
 
 - Labeling: Add a Labels sidebar to toggle on/off map labels and select a feature property to use as the label text. Labels support points, lines and polygon centroids, use halo styling for contrast, and are sized responsively by zoom. The sidebar includes a small live preview and disables controls when no suitable property is available.
+
+## [0.6.0] - 2026-05-08
+
+- UI redesign: Refresh the custom editor with a new cartographic visual style, updated typography, polished map overlays and controls, and a cleaner side-panel/document editor layout that better fits VS Code themes.
+- Document editor: Add find and replace tools to the raw JSON editor, including previous/next match navigation, match counts, optional case-sensitive search, replace-first and replace-all actions, keyboard shortcut support, and selection-aware search seeding.

@@ -142,11 +142,17 @@ An internet connection is required for remote basemap/style assets:
 6. To test the packaged extension, build a VSIX:
 
    ```sh
-   npx vsce package --no-dependencies --out /private/tmp/geojson-visual-editor.vsix
+   npm run package:vsix -- --out /private/tmp/geojson-visual-editor.vsix
    code --install-extension /private/tmp/geojson-visual-editor.vsix
    ```
 
    The package uses `.vscodeignore` so source files, tests, maps, and `.vscode-test/` are excluded from the VSIX.
+
+7. To publish a downloadable VSIX in GitHub Releases:
+   - Bump the version in `package.json`.
+   - Commit and push the change.
+   - Create and push a matching git tag such as `v0.6.0`.
+   - GitHub Actions will build the VSIX and attach it to the corresponding GitHub Release.
 
 ## Release Notes
 

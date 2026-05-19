@@ -4,6 +4,45 @@ const VIEW_TYPE = "geojsonVisualEditor";
 
 const EMPTY_COLLECTION = { type: "FeatureCollection", features: [] };
 const EMPTY_COLLECTION_JSON = JSON.stringify(EMPTY_COLLECTION, null, 2);
+const BASEMAP_IDS = [
+  "carto-positron",
+  "carto-voyager",
+  "carto-dark-matter",
+] as const;
+const LABEL_FONT_FAMILIES = [
+  "Open Sans Regular",
+  "Open Sans Semibold",
+  "Open Sans Bold",
+  "Arial Unicode MS Regular",
+  "Arial Unicode MS Bold",
+] as const;
+
+export type BasemapId = (typeof BASEMAP_IDS)[number];
+export type LabelFontFamily = (typeof LABEL_FONT_FAMILIES)[number];
+
+export interface EditorSettings {
+  uiScale: number;
+  defaultBasemap: BasemapId;
+  defaultFillColor: string;
+  defaultStrokeColor: string;
+  defaultLineWidth: number;
+  defaultStrokeWidth: number;
+  defaultLabelsEnabled: boolean;
+  defaultLabelFontFamily: LabelFontFamily;
+  defaultLabelSize: number;
+}
+
+export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
+  uiScale: 1,
+  defaultBasemap: "carto-positron",
+  defaultFillColor: "#2563EB",
+  defaultStrokeColor: "#F8FAFC",
+  defaultLineWidth: 4,
+  defaultStrokeWidth: 1.2,
+  defaultLabelsEnabled: false,
+  defaultLabelFontFamily: "Open Sans Semibold",
+  defaultLabelSize: 12,
+};
 
 export function toWebviewPayload(rawText: string): {
   text: string;
@@ -36,6 +75,60 @@ export function fromWebviewText(webviewText: string): string {
         : "Edited GeoJSON has invalid syntax.",
     );
   }
+}
+
+export function normaliseEditorSettings(
+  rawSettings: Partial<Record<keyof EditorSettings, unknown>>,
+): EditorSettings {
+  return {
+    uiScale: normaliseNumber(
+      rawSettings.uiScale,
+      0.85,
+      1.4,
+      DEFAULT_EDITOR_SETTINGS.uiScale,
+    ),
+    defaultBasemap: normaliseOption(
+      rawSettings.defaultBasemap,
+      BASEMAP_IDS,
+      DEFAULT_EDITOR_SETTINGS.defaultBasemap,
+    ),
+    defaultFillColor: normaliseHexColour(
+      rawSettings.defaultFillColor,
+      DEFAULT_EDITOR_SETTINGS.defaultFillColor,
+    ),
+    defaultStrokeColor: normaliseHexColour(
+      rawSettings.defaultStrokeColor,
+      DEFAULT_EDITOR_SETTINGS.defaultStrokeColor,
+      true,
+    ),
+    defaultLineWidth: normaliseNumber(
+      rawSettings.defaultLineWidth,
+      1,
+      16,
+      DEFAULT_EDITOR_SETTINGS.defaultLineWidth,
+    ),
+    defaultStrokeWidth: normaliseNumber(
+      rawSettings.defaultStrokeWidth,
+      0.5,
+      12,
+      DEFAULT_EDITOR_SETTINGS.defaultStrokeWidth,
+    ),
+    defaultLabelsEnabled:
+      typeof rawSettings.defaultLabelsEnabled === "boolean"
+        ? rawSettings.defaultLabelsEnabled
+        : DEFAULT_EDITOR_SETTINGS.defaultLabelsEnabled,
+    defaultLabelFontFamily: normaliseOption(
+      rawSettings.defaultLabelFontFamily,
+      LABEL_FONT_FAMILIES,
+      DEFAULT_EDITOR_SETTINGS.defaultLabelFontFamily,
+    ),
+    defaultLabelSize: normaliseNumber(
+      rawSettings.defaultLabelSize,
+      8,
+      24,
+      DEFAULT_EDITOR_SETTINGS.defaultLabelSize,
+    ),
+  };
 }
 
 export function buildWebviewCsp(cspSource: string, nonce: string): string {
@@ -113,6 +206,13 @@ class GeoJsonEditorProvider implements vscode.CustomTextEditorProvider {
       });
     };
 
+    const updateWebviewSettings = () => {
+      void webview.postMessage({
+        type: "settings",
+        settings: this.getEditorSettings(document.uri),
+      });
+    };
+
     const changeSubscription = vscode.workspace.onDidChangeTextDocument(
       (event) => {
         if (event.document.uri.toString() === documentKey) {
@@ -120,14 +220,22 @@ class GeoJsonEditorProvider implements vscode.CustomTextEditorProvider {
         }
       },
     );
+    const configurationSubscription =
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("geojsonVisualEditor", document.uri)) {
+          updateWebviewSettings();
+        }
+      });
 
     webviewPanel.onDidDispose(() => {
       changeSubscription.dispose();
+      configurationSubscription.dispose();
     });
 
     webview.onDidReceiveMessage(async (message) => {
       switch (message?.type) {
         case "ready":
+          updateWebviewSettings();
           updateWebview();
           break;
         case "edit":
@@ -180,6 +288,24 @@ class GeoJsonEditorProvider implements vscode.CustomTextEditorProvider {
 
   private fromWebviewText(webviewText: string): string {
     return fromWebviewText(webviewText);
+  }
+
+  private getEditorSettings(resource: vscode.Uri): EditorSettings {
+    const config = vscode.workspace.getConfiguration(
+      "geojsonVisualEditor",
+      resource,
+    );
+    return normaliseEditorSettings({
+      uiScale: config.get("uiScale"),
+      defaultBasemap: config.get("defaultBasemap"),
+      defaultFillColor: config.get("defaultFillColor"),
+      defaultStrokeColor: config.get("defaultStrokeColor"),
+      defaultLineWidth: config.get("defaultLineWidth"),
+      defaultStrokeWidth: config.get("defaultStrokeWidth"),
+      defaultLabelsEnabled: config.get("defaultLabelsEnabled"),
+      defaultLabelFontFamily: config.get("defaultLabelFontFamily"),
+      defaultLabelSize: config.get("defaultLabelSize"),
+    });
   }
 
   private getWebviewContent(webview: vscode.Webview): string {
@@ -503,6 +629,56 @@ function getNonce(): string {
   return Array.from({ length: 32 }, () =>
     possible.charAt(Math.floor(Math.random() * possible.length)),
   ).join("");
+}
+
+function normaliseNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function normaliseOption<const T extends readonly string[]>(
+  value: unknown,
+  options: T,
+  fallback: T[number],
+): T[number] {
+  return typeof value === "string" && options.includes(value)
+    ? value
+    : fallback;
+}
+
+function normaliseHexColour(
+  value: unknown,
+  fallback: string,
+  allowEmpty = false,
+): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (allowEmpty && !trimmed) {
+    return "";
+  }
+
+  const shorthandMatch = /^#([0-9a-f]{3})$/i.exec(trimmed);
+  if (shorthandMatch) {
+    return shorthandMatch[1]
+      .split("")
+      .map((character) => character + character)
+      .join("")
+      .toUpperCase()
+      .replace(/^/, "#");
+  }
+
+  return /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed.toUpperCase() : fallback;
 }
 
 export function deactivate(): void {}

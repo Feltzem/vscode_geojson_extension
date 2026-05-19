@@ -161,6 +161,24 @@
     "carto-dark-matter":
       "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
   };
+  const labelFontFamilies = [
+    "Open Sans Regular",
+    "Open Sans Semibold",
+    "Open Sans Bold",
+    "Arial Unicode MS Regular",
+    "Arial Unicode MS Bold",
+  ];
+  const defaultEditorSettings = {
+    uiScale: 1,
+    defaultBasemap: "carto-positron",
+    defaultFillColor: "#2563EB",
+    defaultStrokeColor: "#F8FAFC",
+    defaultLineWidth: 4,
+    defaultStrokeWidth: 1.2,
+    defaultLabelsEnabled: false,
+    defaultLabelFontFamily: "Open Sans Semibold",
+    defaultLabelSize: 12,
+  };
   const utils = window.geojsonEditorUtils;
 
   if (!utils) {
@@ -198,7 +216,7 @@
   let hoverPopup = null;
   let hoverTooltipsEnabled = Boolean(tooltipToggleInput?.checked ?? true);
   let coordinatePrecision = parsePrecision(roundDecimalsInput?.value);
-  let selectedBasemap = basemapSelect?.value || "carto-positron";
+  let selectedBasemap = defaultEditorSettings.defaultBasemap;
   let instrumentUpdateFrame = null;
   let themeUpdateFrame = null;
   let rawTextMeasureCanvas = null;
@@ -208,11 +226,11 @@
   const maxVertexSnapDistancePx = 14;
 
   const styleState = {
-    fillColor: "#2563eb",
-    strokeColor: "#f8fafc",
+    fillColor: defaultEditorSettings.defaultFillColor,
+    strokeColor: defaultEditorSettings.defaultStrokeColor,
     strokeEnabled: true,
-    lineWidth: 4,
-    strokeWidth: 1.2,
+    lineWidth: defaultEditorSettings.defaultLineWidth,
+    strokeWidth: defaultEditorSettings.defaultStrokeWidth,
     attributeColourMode: "categorical",
     gradientStartColor: "#0ea5e9",
     gradientMiddleEnabled: false,
@@ -222,8 +240,10 @@
     opacityAttribute: "",
     minTransparency: 10,
     maxTransparency: 80,
-    labelsEnabled: false,
+    labelsEnabled: defaultEditorSettings.defaultLabelsEnabled,
     labelField: "",
+    labelFontFamily: defaultEditorSettings.defaultLabelFontFamily,
+    labelSize: defaultEditorSettings.defaultLabelSize,
   };
 
   const rawFindState = {
@@ -261,6 +281,11 @@
       if (message.error) {
         setStatus(message.error, "error");
       }
+      return;
+    }
+
+    if (message.type === "settings") {
+      applyEditorSettings(message.settings);
       return;
     }
   });
@@ -1065,6 +1090,220 @@
 
   function getCurrentBasemapStyle() {
     return basemapStyles[selectedBasemap] || basemapStyles["carto-positron"];
+  }
+
+  function applyEditorSettings(rawSettings) {
+    const nextSettings = normaliseEditorSettings(rawSettings);
+    const previousBasemap = selectedBasemap;
+
+    selectedBasemap = nextSettings.defaultBasemap;
+    styleState.fillColor = nextSettings.defaultFillColor;
+    styleState.strokeColor =
+      nextSettings.defaultStrokeColor || defaultEditorSettings.defaultStrokeColor;
+    styleState.strokeEnabled = Boolean(nextSettings.defaultStrokeColor);
+    styleState.lineWidth = nextSettings.defaultLineWidth;
+    styleState.strokeWidth = nextSettings.defaultStrokeWidth;
+    styleState.labelsEnabled = nextSettings.defaultLabelsEnabled;
+    styleState.labelFontFamily = nextSettings.defaultLabelFontFamily;
+    styleState.labelSize = nextSettings.defaultLabelSize;
+
+    applyUiScale(nextSettings.uiScale);
+
+    if (basemapSelect) {
+      basemapSelect.value = selectedBasemap;
+      syncCustomSelect(basemapSelect);
+    }
+
+    syncStyleInputs();
+    updateStyleControlAvailability(currentGeoJson || emptyCollection);
+    updateAttributeColouringControls();
+    updateOpacityControls();
+    updateLabelControls();
+
+    if (previousBasemap !== selectedBasemap && map) {
+      applyBasemapStyle();
+      return;
+    }
+
+    applyColouring(attributeSelect.value);
+    applyLabelStyle();
+    applyLabels();
+    updateMapInstruments();
+  }
+
+  function normaliseEditorSettings(rawSettings) {
+    const source =
+      rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+    return {
+      uiScale: normaliseSettingNumber(
+        Number(source.uiScale),
+        0.85,
+        1.4,
+        defaultEditorSettings.uiScale,
+      ),
+      defaultBasemap: Object.prototype.hasOwnProperty.call(
+        basemapStyles,
+        source.defaultBasemap,
+      )
+        ? source.defaultBasemap
+        : defaultEditorSettings.defaultBasemap,
+      defaultFillColor: normaliseColour(
+        source.defaultFillColor,
+        defaultEditorSettings.defaultFillColor,
+      ),
+      defaultStrokeColor: normaliseOptionalColour(
+        source.defaultStrokeColor,
+        defaultEditorSettings.defaultStrokeColor,
+      ),
+      defaultLineWidth: normaliseSettingNumber(
+        Number(source.defaultLineWidth),
+        1,
+        16,
+        defaultEditorSettings.defaultLineWidth,
+      ),
+      defaultStrokeWidth: normaliseSettingNumber(
+        Number(source.defaultStrokeWidth),
+        0.5,
+        12,
+        defaultEditorSettings.defaultStrokeWidth,
+      ),
+      defaultLabelsEnabled:
+        typeof source.defaultLabelsEnabled === "boolean"
+          ? source.defaultLabelsEnabled
+          : defaultEditorSettings.defaultLabelsEnabled,
+      defaultLabelFontFamily: labelFontFamilies.includes(
+        source.defaultLabelFontFamily,
+      )
+        ? source.defaultLabelFontFamily
+        : defaultEditorSettings.defaultLabelFontFamily,
+      defaultLabelSize: normaliseSettingNumber(
+        Number(source.defaultLabelSize),
+        8,
+        24,
+        defaultEditorSettings.defaultLabelSize,
+      ),
+    };
+  }
+
+  function normaliseOptionalColour(value, fallback) {
+    if (typeof value === "string" && !value.trim()) {
+      return "";
+    }
+    return normaliseColour(value, fallback);
+  }
+
+  function normaliseSettingNumber(value, min, max, fallback) {
+    if (!Number.isFinite(value) || value < min || value > max) {
+      return fallback;
+    }
+    return value;
+  }
+
+  function applyUiScale(scale) {
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty("--carto-ui-scale", String(scale));
+    rootStyle.setProperty("--carto-font-size-base", `${12 * scale}px`);
+    rootStyle.setProperty("--carto-font-size-ui", `${11 * scale}px`);
+    rootStyle.setProperty("--carto-font-size-readout", `${10 * scale}px`);
+    rootStyle.setProperty("--carto-font-size-graticule", `${9 * scale}px`);
+    rootStyle.setProperty("--carto-panel-width", `${320 * scale}px`);
+    rootStyle.setProperty("--carto-control-height", `${28 * scale}px`);
+    rootStyle.setProperty("--carto-control-padding-y", `${6 * scale}px`);
+    rootStyle.setProperty("--carto-control-padding-x", `${8 * scale}px`);
+    rootStyle.setProperty("--carto-panel-padding-y", `${10 * scale}px`);
+    rootStyle.setProperty("--carto-panel-padding-x", `${14 * scale}px`);
+    rootStyle.setProperty("--carto-panel-gap", `${7 * scale}px`);
+    rootStyle.setProperty("--carto-map-inset", `${12 * scale}px`);
+    rootStyle.setProperty("--carto-map-tool-size", `${26 * scale}px`);
+    rootStyle.setProperty("--carto-map-tool-padding-x", `${8 * scale}px`);
+    rootStyle.setProperty("--carto-overlay-padding-y", `${5 * scale}px`);
+    rootStyle.setProperty("--carto-overlay-padding-x", `${8 * scale}px`);
+    rootStyle.setProperty("--carto-scale-readout-width", `${84 * scale}px`);
+    rootStyle.setProperty("--carto-scale-bar-width", `${60 * scale}px`);
+    rootStyle.setProperty("--carto-json-gutter-width", `${24 * scale}px`);
+    rootStyle.setProperty("--carto-json-min-height", `${220 * scale}px`);
+    rootStyle.setProperty("--carto-json-max-height", `${340 * scale}px`);
+    rootStyle.setProperty("--carto-graticule-padding-y", `${1 * scale}px`);
+    rootStyle.setProperty("--carto-graticule-padding-x", `${3 * scale}px`);
+    rootStyle.setProperty("--carto-toolbar-gap", `${4 * scale}px`);
+    rootStyle.setProperty("--carto-toolbar-padding", `${4 * scale}px`);
+    rootStyle.setProperty("--carto-metric-gap", `${6 * scale}px`);
+    rootStyle.setProperty("--carto-metric-min-height", `${22 * scale}px`);
+    rootStyle.setProperty("--carto-scale-bar-height", `${2 * scale}px`);
+    rootStyle.setProperty("--carto-panel-header-gap", `${8 * scale}px`);
+    rootStyle.setProperty(
+      "--carto-panel-header-padding-y",
+      `${12 * scale}px`,
+    );
+
+    if (map) {
+      window.requestAnimationFrame(() => {
+        map.resize();
+        updateMapInstruments();
+      });
+    }
+  }
+
+  function getLabelFontStack() {
+    const primary =
+      styleState.labelFontFamily || defaultEditorSettings.defaultLabelFontFamily;
+    const fallback =
+      primary.includes("Bold") || primary.includes("Semibold")
+        ? "Arial Unicode MS Bold"
+        : "Arial Unicode MS Regular";
+    return primary === fallback ? [primary] : [primary, fallback];
+  }
+
+  function getPointLabelSizeExpression() {
+    return buildLabelSizeExpression([
+      [3, -1],
+      [9, 1],
+      [13, 4],
+    ]);
+  }
+
+  function getLineLabelSizeExpression() {
+    return buildLabelSizeExpression([
+      [4, -2],
+      [9, 0],
+      [12, 3],
+    ]);
+  }
+
+  function getAreaLabelSizeExpression() {
+    return buildLabelSizeExpression([
+      [3, -1],
+      [8, 1],
+      [12, 5],
+    ]);
+  }
+
+  function buildLabelSizeExpression(stops) {
+    const expression = ["interpolate", ["linear"], ["zoom"]];
+    stops.forEach(([zoom, offset]) => {
+      expression.push(zoom, clampNumber(styleState.labelSize + offset, 6, 32, 12));
+    });
+    return expression;
+  }
+
+  function applyLabelStyle() {
+    if (!mapReady || !map) {
+      return;
+    }
+
+    const labelStyles = {
+      "geojson-point-label": getPointLabelSizeExpression(),
+      "geojson-line-label": getLineLabelSizeExpression(),
+      "geojson-area-label": getAreaLabelSizeExpression(),
+    };
+
+    Object.entries(labelStyles).forEach(([layerId, textSize]) => {
+      if (!map.getLayer(layerId)) {
+        return;
+      }
+      map.setLayoutProperty(layerId, "text-font", getLabelFontStack());
+      map.setLayoutProperty(layerId, "text-size", textSize);
+    });
   }
 
   function applyBasemapStyle() {
@@ -1968,18 +2207,8 @@
         source: sourceId,
         layout: {
           "text-field": "",
-          "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-          "text-size": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            3,
-            11,
-            9,
-            13,
-            13,
-            16,
-          ],
+          "text-font": getLabelFontStack(),
+          "text-size": getPointLabelSizeExpression(),
           "text-letter-spacing": 0.02,
           "text-variable-anchor": ["top", "bottom", "left", "right"],
           "text-radial-offset": 0.75,
@@ -2009,18 +2238,8 @@
         layout: {
           "symbol-placement": "line",
           "text-field": "",
-          "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-          "text-size": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            4,
-            10,
-            9,
-            12,
-            12,
-            15,
-          ],
+          "text-font": getLabelFontStack(),
+          "text-size": getLineLabelSizeExpression(),
           "text-letter-spacing": 0.06,
           "symbol-spacing": 420,
           "text-keep-upright": true,
@@ -2049,18 +2268,8 @@
         source: sourceId,
         layout: {
           "text-field": "",
-          "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-          "text-size": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            3,
-            11,
-            8,
-            13,
-            12,
-            17,
-          ],
+          "text-font": getLabelFontStack(),
+          "text-size": getAreaLabelSizeExpression(),
           "text-max-width": 9,
           "text-line-height": 1.1,
           "text-padding": 8,
@@ -2334,7 +2543,9 @@
       styleState.labelField = currentSelection;
     } else {
       styleState.labelField = "";
-      styleState.labelsEnabled = false;
+      if (currentSelection) {
+        styleState.labelsEnabled = false;
+      }
     }
 
     updateLabelControls();
@@ -2685,10 +2896,6 @@
       labelFieldSelect && labelFieldSelect.options.length > 1,
     );
     const hasSelectedField = Boolean(styleState.labelField);
-
-    if (!hasSelectedField) {
-      styleState.labelsEnabled = false;
-    }
 
     if (labelFieldSelect) {
       labelFieldSelect.disabled = !hasFields;

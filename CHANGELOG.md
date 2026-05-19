@@ -33,3 +33,8 @@ All notable changes to the "geojson-visual-editor" extension will be documented 
 
 - UI redesign: Refresh the custom editor with a new cartographic visual style, updated typography, polished map overlays and controls, and a cleaner side-panel/document editor layout that better fits VS Code themes.
 - Document editor: Add find and replace tools to the raw JSON editor, including previous/next match navigation, match counts, optional case-sensitive search, replace-first and replace-all actions, keyboard shortcut support, and selection-aware search seeding.
+
+## [0.6.2] - 2026-05-19
+
+- Settings: Add VS Code user/workspace settings for the visual editor UI scale, default basemap, default fill and stroke colours, default line and stroke widths, and default map label font/size.
+- Settings now apply when opening a GeoJSON file and update live in open editors when changed through VS Code Settings or `settings.json`, while keeping `.geojson` files free of editor preference metadata.

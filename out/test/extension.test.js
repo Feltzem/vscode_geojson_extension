@@ -63,5 +63,43 @@ suite("GeoJSON Visual Editor", () => {
         assert.match(csp, /connect-src .*https:\/\/fonts\.gstatic\.com/);
         assert.match(csp, /font-src .*https:\/\/fonts\.gstatic\.com/);
     });
+    test("normalises valid editor settings", () => {
+        const settings = (0, extension_1.normaliseEditorSettings)({
+            uiScale: 1.25,
+            defaultBasemap: "carto-voyager",
+            defaultFillColor: "#abc",
+            defaultStrokeColor: "",
+            defaultLineWidth: 7.5,
+            defaultStrokeWidth: 2.5,
+            defaultLabelsEnabled: true,
+            defaultLabelFontFamily: "Open Sans Bold",
+            defaultLabelSize: 16,
+        });
+        assert.deepStrictEqual(settings, {
+            uiScale: 1.25,
+            defaultBasemap: "carto-voyager",
+            defaultFillColor: "#AABBCC",
+            defaultStrokeColor: "",
+            defaultLineWidth: 7.5,
+            defaultStrokeWidth: 2.5,
+            defaultLabelsEnabled: true,
+            defaultLabelFontFamily: "Open Sans Bold",
+            defaultLabelSize: 16,
+        });
+    });
+    test("falls back for invalid editor settings", () => {
+        const settings = (0, extension_1.normaliseEditorSettings)({
+            uiScale: 2,
+            defaultBasemap: "satellite",
+            defaultFillColor: "blue",
+            defaultStrokeColor: "none",
+            defaultLineWidth: 0,
+            defaultStrokeWidth: 99,
+            defaultLabelsEnabled: "true",
+            defaultLabelFontFamily: "Comic Sans MS",
+            defaultLabelSize: 4,
+        });
+        assert.deepStrictEqual(settings, extension_1.DEFAULT_EDITOR_SETTINGS);
+    });
 });
 //# sourceMappingURL=extension.test.js.map

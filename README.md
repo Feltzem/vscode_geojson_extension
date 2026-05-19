@@ -38,6 +38,12 @@ The custom editor is registered as the default editor for supported GeoJSON file
 - Labels are rendered for points, along lines, and within polygon centroids where possible. They use a subtle halo and high-contrast text to remain readable over basemaps and are sized responsively by zoom level.
 - A small preview card shows an example label value and hints when no values are available.
 
+### Settings
+
+- Configure editor defaults through VS Code Settings UI or `settings.json` under `geojsonVisualEditor.*`.
+- Available defaults include UI scale, basemap, fill colour, stroke colour, line width, stroke width, label font family, label size, and whether labels start enabled once a label field is chosen.
+- Settings can be configured globally or per workspace. Open editors receive safe setting changes live, and `.geojson` files remain pure GeoJSON without editor preference metadata.
+
 ### Feature and property editing
 
 - Add new features from the sidebar:
@@ -86,6 +92,22 @@ The custom editor is registered as the default editor for supported GeoJSON file
 6. Click **Apply Changes** to save updates to disk.
 
 7. To enable labels: open the **Labels** panel, choose a `Label field`, then enable `Show labels`.
+
+8. To set editor defaults: open VS Code Settings and search for "GeoJSON Visual Editor", or edit `settings.json` directly. Example:
+
+   ```json
+   {
+     "geojsonVisualEditor.uiScale": 1.15,
+     "geojsonVisualEditor.defaultBasemap": "carto-voyager",
+     "geojsonVisualEditor.defaultFillColor": "#0ea5e9",
+     "geojsonVisualEditor.defaultStrokeColor": "#f8fafc",
+     "geojsonVisualEditor.defaultLineWidth": 4,
+     "geojsonVisualEditor.defaultStrokeWidth": 1.2,
+     "geojsonVisualEditor.defaultLabelsEnabled": false,
+     "geojsonVisualEditor.defaultLabelFontFamily": "Open Sans Semibold",
+     "geojsonVisualEditor.defaultLabelSize": 12
+   }
+   ```
 
 ## Requirements
 
@@ -149,10 +171,12 @@ An internet connection is required for remote basemap/style assets:
    The package uses `.vscodeignore` so source files, tests, maps, and `.vscode-test/` are excluded from the VSIX.
 
 7. To publish a downloadable VSIX in GitHub Releases:
-   - Bump the version in `package.json`.
-   - Commit and push the change.
-   - Create and push a matching git tag such as `v0.6.0`.
-   - GitHub Actions will build the VSIX and attach it to the corresponding GitHub Release.
+   - Bump the version in `package.json` and `package-lock.json`.
+   - Update `CHANGELOG.md`.
+   - Run `npm test`.
+   - Commit and push the release changes.
+   - Create and push a matching git tag such as `v0.6.2`.
+   - GitHub Actions will build `geojson-visual-editor-0.6.2.vsix` and attach it to the corresponding GitHub Release.
 
 ## Release Notes
 

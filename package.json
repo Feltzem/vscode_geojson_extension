@@ -3,7 +3,7 @@
   "displayName": "GeoJSON Visual Editor",
   "description": "Open, edit, and visualize GeoJSON data",
   "publisher": "feltzem",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/Feltzem/geojson_extension.git"
@@ -47,7 +47,93 @@
         ],
         "priority": "default"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "GeoJSON Visual Editor",
+      "properties": {
+        "geojsonVisualEditor.uiScale": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.85,
+          "maximum": 1.4,
+          "scope": "resource",
+          "markdownDescription": "Scales the GeoJSON Visual Editor webview UI. Use values above `1` to make the controls, panel, overlays, and JSON editor larger."
+        },
+        "geojsonVisualEditor.defaultBasemap": {
+          "type": "string",
+          "default": "carto-positron",
+          "enum": [
+            "carto-positron",
+            "carto-voyager",
+            "carto-dark-matter"
+          ],
+          "enumDescriptions": [
+            "Carto Positron.",
+            "Carto Voyager.",
+            "Carto Dark Matter."
+          ],
+          "scope": "resource",
+          "description": "Default basemap style used when opening a GeoJSON file."
+        },
+        "geojsonVisualEditor.defaultFillColor": {
+          "type": "string",
+          "default": "#2563eb",
+          "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+          "scope": "resource",
+          "description": "Default fill, line, and point colour."
+        },
+        "geojsonVisualEditor.defaultStrokeColor": {
+          "type": "string",
+          "default": "#f8fafc",
+          "pattern": "^(?:#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}))?$",
+          "scope": "resource",
+          "markdownDescription": "Default polygon outline and point stroke colour. Set to an empty string to disable strokes by default."
+        },
+        "geojsonVisualEditor.defaultLineWidth": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 16,
+          "scope": "resource",
+          "description": "Default width for line geometries."
+        },
+        "geojsonVisualEditor.defaultStrokeWidth": {
+          "type": "number",
+          "default": 1.2,
+          "minimum": 0.5,
+          "maximum": 12,
+          "scope": "resource",
+          "description": "Default polygon outline and point stroke width."
+        },
+        "geojsonVisualEditor.defaultLabelsEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Whether map labels are enabled by default once a label field is selected."
+        },
+        "geojsonVisualEditor.defaultLabelFontFamily": {
+          "type": "string",
+          "default": "Open Sans Semibold",
+          "enum": [
+            "Open Sans Regular",
+            "Open Sans Semibold",
+            "Open Sans Bold",
+            "Arial Unicode MS Regular",
+            "Arial Unicode MS Bold"
+          ],
+          "scope": "resource",
+          "description": "Default MapLibre font family for feature labels."
+        },
+        "geojsonVisualEditor.defaultLabelSize": {
+          "type": "number",
+          "default": 12,
+          "minimum": 8,
+          "maximum": 24,
+          "scope": "resource",
+          "description": "Default feature label size in map pixels."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
